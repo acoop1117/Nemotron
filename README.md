@@ -16,13 +16,12 @@ nemotron/
 │   ├── usage/             Usage guides (coming soon)
 │   └── deployment/        Deployment guides (coming soon)
 │
-├── examples/              Runnable code examples
-│   ├── training/          Training pipeline patterns (data prep, training, eval)
-│   └── usage/             Agent workflows, RAG, tool use (coming soon)
+├── usage-cookbook/        Usage examples and cookbooks (coming soon)
 │
 ├── src/nemotron/          The nemotron package
 │   ├── ...                # Internals of nemotron package
 │   └── recipes/           Full training reproductions (coming soon)
+│       ├── hello.py       Minimal example showing artifact pattern
 │       ├── nano2/         2B pretraining, instruction tuning, alignment
 │       └── chipnemo/      Domain adaptation for chip design
 │
@@ -51,25 +50,18 @@ cd nemotron
 ```
 ---
 
-## Usage & Examples
-
-Check out the **[examples/](examples/)** directory for runnable code examples.
-
-### Quick Links
-
-- **[Training Examples](examples/training/)** - Training pipeline patterns (data prep, training, eval)
-- **[Usage Examples](examples/usage/)** - Agent workflows, RAG, tool use *(coming soon)*
-- **[Usage Guides](docs/usage/)** - How-to guides for working with Nemotron *(coming soon)*
-- **[Deployment Guides](docs/deployment/)** - Deployment strategies and best practices *(coming soon)*
-
-### Example Training Pipeline
+## Quick Example
 
 ```bash
-# Run a complete 3-stage training pipeline
-uv run python examples/training/tutorial_data_prep.py | \
-    uv run python examples/training/tutorial_training.py | \
-    uv run python examples/training/tutorial_evaluation.py
+# Run the minimal hello example showing artifact pattern
+uv run python -m nemotron.recipes.hello
 ```
+
+### More Resources
+
+- **[Usage Cookbook](usage-cookbook/)** - Practical recipes for using Nemotron models *(coming soon)*
+- **[Usage Guides](docs/usage/)** - How-to guides for working with Nemotron *(coming soon)*
+- **[Deployment Guides](docs/deployment/)** - Deployment strategies and best practices *(coming soon)*
 
 ---
 
@@ -148,13 +140,13 @@ nemotron/
 │   ├── deployment/            # Deployment guides (coming soon)
 │   ├── training/              # Training recipe documentation
 │   │   ├── add-recipe.md     # How to add recipes
+│   │   ├── design.md         # Framework design philosophy
 │   │   └── run-recipe.md     # How to run recipes
 │   └── usage/                 # Usage guides (coming soon)
-├── examples/                  # Runnable code examples
-│   ├── training/              # Training pipeline patterns
-│   └── usage/                 # Agent workflows, RAG, tool use (coming soon)
+├── usage-cookbook/            # Usage examples and cookbooks (coming soon)
 ├── src/nemotron/              # The nemotron package
 │   └── recipes/               # (Coming soon) Training recipes
+│       ├── hello.py          # Minimal example showing artifact pattern
 │       ├── chipnemo/         # ChipNeMo/ScaleRTL
 │       │   ├── stage0_pretrain/
 │       │   ├── stage1_sft/
