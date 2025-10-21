@@ -2,8 +2,9 @@
 
 Developer companion repo for working with NVIDIA's Nemotron models: inference, fine-tuning, agents, visual reasoning, deployment.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ---
 
@@ -11,21 +12,11 @@ Developer companion repo for working with NVIDIA's Nemotron models: inference, f
 
 ```
 nemotron/
-├── docs/                  Documentation and guides
-│   ├── training/          Recipe guides (run-recipe.md, add-recipe.md)
-│   ├── usage/             Usage guides (coming soon)
-│   └── deployment/        Deployment guides (coming soon)
 │
-├── usage-cookbook/        Usage examples and cookbooks (coming soon)
+├── usage-cookbook/        Usage cookbooks (how to deploy, and simple model usage guides)
 │
-├── src/nemotron/          The nemotron package
-│   ├── ...                # Internals of nemotron package
-│   └── recipes/           Full training reproductions (coming soon)
-│       ├── hello.py       Minimal example showing artifact pattern
-│       ├── nano2/         2B pretraining, instruction tuning, alignment
-│       └── chipnemo/      Domain adaptation for chip design
 │
-└── tests/                 Training recipe tests
+└── examples/              Examples of leveraging Nemotron Models in Agentic Workflows and more 
 ```
 
 ---
@@ -40,34 +31,16 @@ They are optimized for deployment across a spectrum of compute tiers (edge, sing
 
 ---
 
-## Quick Start
-
-> TODO: Flesh out quick start
-```bash
-# Clone the repository
-git clone https://github.com/NVIDIA-NeMo/Nemotron
-cd nemotron
-```
----
-
-## Quick Example
-
-```bash
-# Run the minimal hello example showing artifact pattern
-uv run python -m nemotron.recipes.hello
-```
-
 ### More Resources
 
-- **[Usage Cookbook](usage-cookbook/)** - Practical recipes for using Nemotron models *(coming soon)*
-- **[Usage Guides](docs/usage/)** - How-to guides for working with Nemotron *(coming soon)*
-- **[Deployment Guides](docs/deployment/)** - Deployment strategies and best practices *(coming soon)*
+- **[Usage Cookbook](usage-cookbook/)** - Practical deployment and simple model usage guides for Nemotron models *(coming soon)*
+- **[Usage Examples](usage-examples/)** - Practical use-case examples and apps
 
 ---
 
 ## Training Recipes (Coming Soon)
 
-Full, reproducible training pipelines are included in the `nemotron` package at `src/nemotron/recipes/`.
+Full, reproducible training pipelines will be included in the `nemotron` package at `src/nemotron/recipes/`.
 
 ### Each Recipe Includes
 - 🗂️ **Data Curation** - Scripts to prepare training data using [NVIDIA-NeMo/Curator](https://github.com/NVIDIA-NeMo/Curator)
@@ -78,27 +51,6 @@ Full, reproducible training pipelines are included in the `nemotron` package at 
 - 📊 **Evaluation** - Benchmark evaluation on standard suites using [NVIDIA-NeMo/Evaluator](https://github.com/NVIDIA-NeMo/Evaluator)
 - 📖 **Documentation** - Detailed explanations of each stage
 
-### Running a Recipe
-
-```bash
-# Run complete stage (uv handles dependencies automatically)
-uv run python -m nemotron.recipes.nano2.stage0_pretrain --scale tiny
-
-# Or run individual steps as scripts
-uv run python -m nemotron.recipes.nano2.stage0_pretrain.data_curation --scale tiny
-uv run python -m nemotron.recipes.nano2.stage0_pretrain.training \
-    --dataset-path /workspace/outputs/nano2/stage0/data
-uv run python -m nemotron.recipes.nano2.stage0_pretrain.evaluation \
-    --checkpoint-path /workspace/outputs/nano2/stage0/training
-```
-
-See **[Running Training Recipes](docs/training/run-recipe.md)** for detailed usage instructions.
-
-### Available Recipes
-
-- **Nemotron Nano 2** (`nemotron.recipes.nano2`) - 2B model with pretraining, instruction tuning, and alignment ([paper](https://arxiv.org/pdf/2508.14444))
-- **ChipNeMo/ScaleRTL** (`nemotron.recipes.chipnemo`) - Domain-adapted LLM for RTL code generation with reasoning data ([paper](https://arxiv.org/abs/2506.05566))
-
 ---
 
 ## Contributing
@@ -107,56 +59,16 @@ We welcome contributions! Whether it's examples, recipes, or other tools you'd f
 
 Please read our **[Contributing Guidelines](CONTRIBUTING.md)** before submitting pull requests.
 
-### Adding a New Training Recipe
-
-See the documentation in `docs/training/`:
-- **[Running Recipes](docs/training/run-recipe.md)** - How to run existing training recipes
-- **[Adding Recipes](docs/training/add-recipe.md)** - Guide for contributing new recipes
-
----
-
 ## Documentation
 
 - **[Contributing Guidelines](CONTRIBUTING.md)** - How to contribute to this project
 - **[Changelog](CHANGELOG.md)** - Version history and changes
-- **[Framework Design](docs/training/design.md)** - Design philosophy and key concepts
-- **[Running Training Recipes](docs/training/run-recipe.md)** - How to run existing recipes
-- **[Adding Training Recipes](docs/training/add-recipe.md)** - Guide for contributing new recipes
-- More guides coming soon...
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-## Repository Structure
-
-```
-nemotron/
-├── docs/                      # Documentation and guides
-│   ├── deployment/            # Deployment guides (coming soon)
-│   ├── training/              # Training recipe documentation
-│   │   ├── add-recipe.md     # How to add recipes
-│   │   ├── design.md         # Framework design philosophy
-│   │   └── run-recipe.md     # How to run recipes
-│   └── usage/                 # Usage guides (coming soon)
-├── usage-cookbook/            # Usage examples and cookbooks (coming soon)
-├── src/nemotron/              # The nemotron package
-│   └── recipes/               # (Coming soon) Training recipes
-│       ├── hello.py          # Minimal example showing artifact pattern
-│       ├── chipnemo/         # ChipNeMo/ScaleRTL
-│       │   ├── stage0_pretrain/
-│       │   ├── stage1_sft/
-│       │   └── stage2_reasoning/
-│       └── nano2/            # Nemotron Nano 2
-│           ├── stage0_pretrain/
-│           ├── stage1_instruction_tuning/
-│           └── stage2_alignment/
-└── tests/                     # Training recipe tests
-```
+Apache 2.0 License - see [LICENSE](LICENSE) file for details.
 
 ---
 
