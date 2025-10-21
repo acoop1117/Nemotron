@@ -14,4 +14,4 @@ This directory contains cookbook-style guides showing how to deploy and use the 
 - **NIM Microservice** - Guide to deploying Nemotron as scalable, production-ready endpoints using NVIDIA Inference Microservices (NIM).
 - **Hugging Face Transformers** - Direct loading and inference of Nemotron models with Hugging Face Transformers
 
-*(Coming soon)*
+
