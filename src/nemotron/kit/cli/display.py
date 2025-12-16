@@ -94,22 +94,33 @@ def _resolve_run_interpolations(obj: any, run_data: dict) -> any:
 
     Only resolves ${run.X.Y} style interpolations, preserves other
     interpolations like ${art:data,path}.
+
+    Handles both:
+    - Simple: ${run.env.host} -> "dlw"
+    - Embedded: ${run.env.remote_job_dir}/eval_results -> "/path/run/eval_results"
     """
+    import re
+
     if isinstance(obj, dict):
         return {k: _resolve_run_interpolations(v, run_data) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_resolve_run_interpolations(item, run_data) for item in obj]
-    elif isinstance(obj, str) and obj.startswith("${run.") and obj.endswith("}"):
-        # Extract the path: ${run.wandb.project} -> wandb.project
-        path = obj[6:-1]  # Remove "${run." and "}"
-        parts = path.split(".")
-        value = run_data
-        for part in parts:
-            if isinstance(value, dict) and part in value:
-                value = value[part]
-            else:
-                return obj  # Can't resolve, keep original
-        return value
+    elif isinstance(obj, str):
+        # Find all ${run.*} interpolations in the string
+        pattern = r"\$\{run\.([^}]+)\}"
+
+        def replace_interpolation(match: re.Match) -> str:
+            path = match.group(1)  # e.g., "env.host" or "wandb.project"
+            parts = path.split(".")
+            value = run_data
+            for part in parts:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    return match.group(0)  # Can't resolve, keep original
+            return str(value)
+
+        return re.sub(pattern, replace_interpolation, obj)
     else:
         return obj
 
@@ -156,15 +167,15 @@ def _display_config_section(job_config: DictConfig, *, for_remote: bool = False)
     if not config_dict:
         return
 
+    # Always resolve ${run.*} interpolations for display
+    config_dict = _resolve_run_interpolations(config_dict, run_section)
+
     if for_remote:
-        # Rewrite paths for remote execution display
+        # Also rewrite paths for remote execution display
         import os
 
         repo_root_str = os.getcwd()
         config_dict = _rewrite_paths_for_remote(config_dict, repo_root_str)
-    else:
-        # Resolve ${run.*} interpolations for display
-        config_dict = _resolve_run_interpolations(config_dict, run_section)
 
     # Convert back to OmegaConf for YAML serialization
     config_without_run = OmegaConf.create(config_dict)

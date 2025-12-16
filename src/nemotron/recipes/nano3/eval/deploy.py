@@ -117,8 +117,23 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config(config_path: str) -> Config:
-    """Load configuration from YAML file."""
+    """Load configuration from YAML file.
+
+    Registers the art: resolver for W&B artifact interpolations before loading,
+    so ${art:model,path} can be resolved to the actual checkpoint path.
+    """
+    from nemotron.kit.resolvers import register_resolvers_from_config
+
     cfg = OmegaConf.load(config_path)
+
+    # Register art: resolver for artifact interpolations (e.g., ${art:model,path})
+    # This must be done before accessing any config values that use ${art:...}
+    register_resolvers_from_config(
+        cfg,
+        artifacts_key="run",
+        mode="pre_init",
+        pre_init_patch_http_digest=True,
+    )
 
     # Extract deploy config
     deploy_cfg = cfg.get("deploy", {})

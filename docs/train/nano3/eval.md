@@ -1,18 +1,30 @@
 # Model Evaluation
 
-Evaluate trained models against standard benchmarks using Export-Deploy and nemo-evaluator-launcher.
+Evaluate trained models against standard benchmarks.
+
+## Powered By
+
+This evaluation pipeline leverages two NVIDIA NeMo ecosystem projects:
+
+| Project | Purpose | Repository |
+|---------|---------|------------|
+| **Export-Deploy** | High-performance model deployment with Ray Serve and vLLM | [NVIDIA-NeMo/Export-Deploy](https://github.com/NVIDIA-NeMo/Export-Deploy) |
+| **Evaluator** | Benchmark orchestration with nemo-evaluator-launcher | [NVIDIA-NeMo/Evaluator](https://github.com/NVIDIA-NeMo/Evaluator) |
+
+Export-Deploy handles loading Megatron checkpoints and serving them via an OpenAI-compatible API.
+Evaluator runs standard benchmarks (ARC, Winogrande, HellaSwag, etc.) against the deployed endpoint.
 
 ## Overview
 
 This command orchestrates model deployment and evaluation as a single RayJob:
 
-1. **Deploy**: Starts a Ray Serve inference server using direct Ray integration
-2. **Eval**: Runs benchmarks against the deployed model using nemo-evaluator-launcher
+1. **Deploy**: Starts a Ray Serve inference server using [Export-Deploy](https://github.com/NVIDIA-NeMo/Export-Deploy)
+2. **Eval**: Runs benchmarks using [nemo-evaluator-launcher](https://github.com/NVIDIA-NeMo/Evaluator)
 3. **Shutdown**: Gracefully shuts down the deployment
 
 | Component | Description |
 |-----------|-------------|
-| `deploy_eval.py` | Combined deploy + evaluation script using Ray Serve |
+| `deploy.py` | Deployment script using Export-Deploy's Ray Serve integration |
 | `config/` | Configuration files for deployment and evaluation settings |
 
 ## Requirements
@@ -25,18 +37,26 @@ This command orchestrates model deployment and evaluation as a single RayJob:
 
 ### Using nemotron CLI
 
+Each stage config (pretrain, sft, rl) has the model artifact pre-configured:
+
 ```bash
-# Evaluate a model checkpoint
-nemotron nano3 model eval /path/to/checkpoint --run YOUR-CLUSTER
+# Evaluate pretrained checkpoint (uses ModelArtifact-pretrain:latest)
+nemotron nano3 model eval -c pretrain --run YOUR-CLUSTER
+
+# Evaluate SFT checkpoint (uses ModelArtifact-sft:latest)
+nemotron nano3 model eval -c sft --run YOUR-CLUSTER
+
+# Evaluate RL-aligned checkpoint (uses ModelArtifact-rl:latest)
+nemotron nano3 model eval -c rl --run YOUR-CLUSTER
 
 # Quick test with tiny config (single benchmark, limited samples)
-nemotron nano3 model eval /path/to/checkpoint -c tiny --run YOUR-CLUSTER
+nemotron nano3 model eval -c sft -c tiny --run YOUR-CLUSTER
 
 # Preview configuration without execution
-nemotron nano3 model eval /path/to/checkpoint --dry-run
+nemotron nano3 model eval -c pretrain --run YOUR-CLUSTER --dry-run
 
 # Detached execution (returns immediately)
-nemotron nano3 model eval /path/to/checkpoint --batch YOUR-CLUSTER
+nemotron nano3 model eval -c sft --batch YOUR-CLUSTER
 ```
 
 ### Override Settings
@@ -44,17 +64,21 @@ nemotron nano3 model eval /path/to/checkpoint --batch YOUR-CLUSTER
 Use dotlist overrides to customize evaluation:
 
 ```bash
+# Override model artifact version
+nemotron nano3 model eval -c sft --run YOUR-CLUSTER \
+    run.model=ModelArtifact-sft:v5
+
 # Increase parallelism
-nemotron nano3 model eval /path/to/checkpoint --run YOUR-CLUSTER \
+nemotron nano3 model eval -c pretrain --run YOUR-CLUSTER \
     eval.parallelism=64
 
 # Change deployment settings
-nemotron nano3 model eval /path/to/checkpoint --run YOUR-CLUSTER \
+nemotron nano3 model eval -c sft --run YOUR-CLUSTER \
     deploy.num_gpus=4 \
     deploy.tensor_model_parallel_size=2
 
 # Limit samples for quick testing
-nemotron nano3 model eval /path/to/checkpoint --run YOUR-CLUSTER \
+nemotron nano3 model eval -c pretrain --run YOUR-CLUSTER \
     eval.limit_samples=100
 ```
 
@@ -64,16 +88,30 @@ nemotron nano3 model eval /path/to/checkpoint --run YOUR-CLUSTER \
 
 | File | Description |
 |------|-------------|
-| `config/default.yaml` | Full evaluation with multiple benchmarks |
+| `config/pretrain.yaml` | Pretrain stage evaluation (ModelArtifact-pretrain:latest) |
+| `config/sft.yaml` | SFT stage evaluation (ModelArtifact-sft:latest) |
+| `config/rl.yaml` | RL stage evaluation (ModelArtifact-rl:latest) |
+| `config/default.yaml` | Base config (requires model artifact override) |
 | `config/tiny.yaml` | Quick test with single benchmark, 100 samples |
 
 ### Configuration Structure
 
 ```yaml
+# Runtime settings (merged with env.toml profile)
+run:
+  model: ModelArtifact-sft:latest  # Model artifact to evaluate
+  env:
+    container: nvcr.io/nvidian/nemo:25.11-nano-v3.rc2
+  comms:
+    endpoint_file: endpoint.json
+    completion_file: done
+
+# Model loading configuration
 model:
-  checkpoint_path: ???     # Set via CLI argument
+  checkpoint_path: ${art:model,path}  # Resolved from run.model artifact
   model_type: gpt
 
+# Export-Deploy configuration (Ray Serve)
 deploy:
   host: "0.0.0.0"
   port: 8000
@@ -82,7 +120,18 @@ deploy:
   expert_model_parallel_size: 1
   pipeline_model_parallel_size: 1
 
+# Evaluator configuration (nemo-evaluator-launcher)
 eval:
+  execution:               # SLURM settings (from env.toml profile)
+    hostname: ${run.env.host}
+    username: ${run.env.user}
+    account: ${run.env.account}
+    partition: ${run.env.partition}
+    output_dir: ${run.env.remote_job_dir}/eval_results
+  export:                  # Results export (W&B)
+    wandb:
+      entity: ${run.wandb.entity}
+      project: ${run.wandb.project}
   tasks:                   # Benchmarks to run
     - name: adlr_arc_challenge_llama_25_shot
     - name: adlr_winogrande_5_shot
@@ -173,6 +222,13 @@ The nemo-evaluator-launcher generates:
 - Detailed logs for debugging
 
 ## See Also
+
+### Upstream Projects
+
+- [Export-Deploy](https://github.com/NVIDIA-NeMo/Export-Deploy) - Model deployment with Ray Serve and vLLM
+- [Evaluator](https://github.com/NVIDIA-NeMo/Evaluator) - Benchmark orchestration with nemo-evaluator-launcher
+
+### Related Documentation
 
 - [SFT Training](sft.md) - Train instruction-following models
 - [RL Training](rl.md) - Alignment training with GRPO

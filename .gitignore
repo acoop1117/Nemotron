@@ -74,6 +74,7 @@ workspace/
 wandb/
 .nemotron/
 .conductor/
+.jobs/
 
 # Claude Code
 CLAUDE.md

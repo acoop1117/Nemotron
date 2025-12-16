@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -123,11 +122,9 @@ def model_eval(
             if global_ctx is None:
                 global_ctx = GlobalContext()
 
-            # Split unknown args into dotlist, passthrough, and extract model_path
-            # Model path is the first non-option, non-dotlist argument
+            # Split unknown args into dotlist and passthrough
             args = ctx.args or []
-            model_path, remaining_args = _extract_model_path(args)
-            dotlist, passthrough, global_ctx = split_unknown_args(remaining_args, global_ctx)
+            dotlist, passthrough, global_ctx = split_unknown_args(args, global_ctx)
             global_ctx.dotlist = dotlist
             global_ctx.passthrough = passthrough
 
@@ -171,10 +168,7 @@ def model_eval(
             # Apply dotlist overrides
             config = apply_dotlist_overrides(config, dotlist)
 
-            # Determine the model reference (from CLI argument or config)
-            # Config may have run.model set (e.g., stage-specific configs like sft.yaml)
-            from nemotron.kit.resolvers import _is_artifact_reference
-
+            # Validate that run.model is set in config
             config_has_model = (
                 "run" in config
                 and "model" in config.run
@@ -182,37 +176,18 @@ def model_eval(
                 and str(config.run.model) != "???"
             )
 
-            if model_path:
-                # CLI argument takes precedence
-                if "run" not in config:
-                    config["run"] = {}
-                config.run.model = model_path
-                effective_model = model_path
-            elif config_has_model:
-                # Use model from config (e.g., ModelArtifact-sft:latest)
-                effective_model = str(config.run.model)
-            else:
+            if not config_has_model:
                 typer.echo(
-                    "Error: No model specified. Either:\n"
-                    "  - Provide a model path: nemotron nano3 model eval /path/to/checkpoint --run <profile>\n"
-                    "  - Use a stage config: nemotron nano3 model eval -c sft --run <profile>\n"
-                    "  - Set via dotlist: nemotron nano3 model eval --run <profile> run.model=sft:latest",
+                    "Error: No model specified in config (run.model).\n"
+                    "Use a stage config with model pre-configured:\n"
+                    "  nemotron nano3 model eval -c sft --run <profile>\n"
+                    "  nemotron nano3 model eval -c pretrain --run <profile>\n"
+                    "  nemotron nano3 model eval -c rl --run <profile>\n"
+                    "Or set via dotlist:\n"
+                    "  nemotron nano3 model eval -c default --run <profile> run.model=ModelArtifact-sft:latest",
                     err=True,
                 )
                 raise typer.Exit(1)
-
-            # If it's a direct path (not an artifact reference), validate it exists
-            # Artifact references (e.g., "sft:latest") are resolved at runtime
-            if not _is_artifact_reference(effective_model):
-                checkpoint = Path(effective_model)
-                if not checkpoint.exists():
-                    typer.echo(f"Error: Checkpoint path does not exist: {effective_model}", err=True)
-                    raise typer.Exit(1)
-                # For direct paths, also set model.checkpoint_path directly
-                # This provides backwards compatibility and works without artifact resolution
-                if "model" not in config:
-                    config["model"] = {}
-                config.model.checkpoint_path = effective_model
 
             # Build job config with execution metadata
             job_config = _build_job_config(config, global_ctx, name)
@@ -253,57 +228,6 @@ def model_eval(
     return decorator
 
 
-def _extract_model_path(args: list[str]) -> tuple[str | None, list[str]]:
-    """Extract model path from args list.
-
-    Model path is the first argument that:
-    - Doesn't start with '-' (not an option)
-    - Doesn't contain '=' (not a dotlist override)
-    - Looks like a path or artifact reference
-
-    Args:
-        args: List of arguments from ctx.args
-
-    Returns:
-        Tuple of (model_path or None, remaining_args)
-    """
-    # Known options that take a value (skip these and their values)
-    options_with_values = {"-c", "--config", "-r", "--run", "-b", "--batch"}
-
-    remaining = []
-    model_path = None
-    skip_next = False
-
-    for i, arg in enumerate(args):
-        if skip_next:
-            remaining.append(arg)
-            skip_next = False
-            continue
-
-        if arg in options_with_values:
-            remaining.append(arg)
-            skip_next = True
-            continue
-
-        if arg.startswith("-"):
-            # Option flag (like --dry-run)
-            remaining.append(arg)
-            continue
-
-        if "=" in arg:
-            # Dotlist override
-            remaining.append(arg)
-            continue
-
-        # First non-option, non-dotlist argument is the model path
-        if model_path is None:
-            model_path = arg
-        else:
-            remaining.append(arg)
-
-    return model_path, remaining
-
-
 def _find_repo_root() -> Path | None:
     """Find the repository root by looking for pyproject.toml."""
     current = Path.cwd()
@@ -320,6 +244,61 @@ def _create_job_dir(name: str) -> Path:
     job_dir = Path.cwd() / ".jobs" / f"{safe_name}_{timestamp}"
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_dir
+
+
+def _resolve_config_for_remote(job_config: OmegaConf) -> OmegaConf:
+    """Resolve standard interpolations in config before sending to remote.
+
+    Resolves ${run.env.*} and similar interpolations that reference other parts
+    of the config. Does NOT resolve ${art:...} interpolations - those are resolved
+    at runtime on the cluster where the artifacts are accessible.
+
+    Args:
+        job_config: Config with potentially unresolved interpolations
+
+    Returns:
+        New config with standard interpolations resolved, but ${art:...} preserved
+    """
+    # We need to resolve standard OmegaConf interpolations (like ${run.env.host})
+    # but preserve ${art:...} custom resolver interpolations for runtime resolution.
+    #
+    # Strategy: Convert to YAML, replace ${art: with a placeholder, resolve, restore.
+    import re
+
+    config_yaml = OmegaConf.to_yaml(job_config)
+
+    # Find all ${art:...} interpolations and replace with placeholders
+    art_pattern = r"\$\{art:([^}]+)\}"
+    art_matches = re.findall(art_pattern, config_yaml)
+    placeholders = {}
+
+    for i, match in enumerate(art_matches):
+        placeholder = f"__ART_PLACEHOLDER_{i}__"
+        original = f"${{art:{match}}}"
+        placeholders[placeholder] = original
+        config_yaml = config_yaml.replace(original, placeholder, 1)
+
+    # Parse the modified YAML and resolve standard interpolations
+    try:
+        temp_config = OmegaConf.create(config_yaml)
+        resolved_dict = OmegaConf.to_container(temp_config, resolve=True)
+    except Exception as e:
+        typer.echo(
+            f"Error: Could not resolve config interpolations: {e}\n\n"
+            "Check that all referenced values exist in the config.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Convert back to YAML and restore ${art:...} placeholders
+    resolved_yaml = OmegaConf.to_yaml(OmegaConf.create(resolved_dict))
+    for placeholder, original in placeholders.items():
+        resolved_yaml = resolved_yaml.replace(placeholder, original)
+
+    # Parse the final config
+    resolved_config = OmegaConf.create(resolved_yaml)
+
+    return resolved_config
 
 
 def _build_job_config(
@@ -360,6 +339,13 @@ def _build_job_config(
         run_updates["env"] = {**existing_env, **profile_env}
     elif existing_env:
         run_updates["env"] = existing_env
+
+    # Add wandb config from env.toml (if present)
+    from nemotron.kit.cli.env import get_wandb_config
+
+    wandb_config = get_wandb_config()
+    if wandb_config:
+        run_updates["wandb"] = OmegaConf.to_container(wandb_config, resolve=True)
 
     # Ensure run section exists and merge updates
     if "run" not in job_config:
@@ -408,15 +394,8 @@ def _execute_ray_job(
     if hasattr(job_config, "run") and hasattr(job_config.run, "env"):
         env_config = OmegaConf.to_container(job_config.run.env, resolve=True)
 
-    # Build environment variables
-    env_vars = _build_env_vars(job_config, env_config)
-
-    # Build executor (GPU job for deploy+eval)
-    executor = _build_executor(env_config, env_vars)
-
     # Generate unique job name to prevent directory collisions
     job_name = f"{name.replace('/', '-')}_{int(time.time())}"
-    ray_job = RayJob(name=job_name, executor=executor)
 
     # Get comms directory from config (for coordination files)
     # Comms is now under run.comms
@@ -432,23 +411,33 @@ def _execute_ray_job(
         job_config.run["comms"] = {}
     job_config.run.comms.base_dir = comms_base
 
-    # Copy config to repo root so it gets rsynced to the remote
+    # Resolve all interpolations locally before sending to remote
+    # The remote container doesn't have custom resolvers (like art:) registered
+    job_config = _resolve_config_for_remote(job_config)
+
+    # Save config to repo root (needed for SelfContainedPackager to include it)
     repo_config = Path.cwd() / "config.yaml"
     OmegaConf.save(job_config, repo_config)
 
-    # Setup commands to prepare the environment before running
-    setup_commands = [
-        "find . -type d -name __pycache__ -delete 2>/dev/null || true",
-        "uv sync --reinstall-package nemotron",
-    ]
+    # Build environment variables
+    env_vars = _build_env_vars(job_config, env_config)
+
+    # Build executor with SelfContainedPackager (minimal: main.py + config.yaml)
+    executor = _build_executor(env_config, env_vars, script, repo_config)
+
+    ray_job = RayJob(name=job_name, executor=executor)
+
+    # No setup commands needed - SelfContainedPackager inlines all nemotron imports
+    setup_commands: list[str] = []
 
     # Build the command to run
+    # SelfContainedPackager creates main.py with the script inlined
     if attached:
         # --run mode: deploy only, wait for done signal
-        cmd = f"uv run python {script} --config config.yaml"
+        cmd = "python main.py --config config.yaml"
     else:
         # --batch mode: deploy + orchestrate eval
-        cmd = f"uv run python {script} --config config.yaml --orchestrate"
+        cmd = "python main.py --config config.yaml --orchestrate"
 
     # Build runtime_env with environment variables for Ray workers
     import yaml
@@ -486,7 +475,8 @@ def _execute_ray_job(
 
     ray_job.start(
         command=cmd,
-        # Pass empty workdir to use CodePackager (respects .gitignore)
+        # Empty workdir tells nemo-run to use executor.packager (SelfContainedPackager)
+        # which creates a minimal tarball with just main.py + config.yaml
         workdir="",
         pre_ray_start_commands=setup_commands,
         runtime_env_yaml=runtime_env_yaml,
@@ -531,9 +521,24 @@ def _build_env_vars(job_config: OmegaConf, env_config: dict) -> dict[str, str]:
     return env_vars
 
 
-def _build_executor(env_config: dict, env_vars: dict[str, str]) -> Any:
-    """Build nemo-run executor from env config."""
+def _build_executor(
+    env_config: dict,
+    env_vars: dict[str, str],
+    script_path: str,
+    config_path: Path,
+) -> Any:
+    """Build nemo-run executor from env config.
+
+    Args:
+        env_config: Environment configuration dict
+        env_vars: Pre-built environment variables
+        script_path: Path to the deploy script (for packaging)
+        config_path: Path to the saved config.yaml (for packaging)
+    """
     import nemo_run as run
+
+    from nemotron.kit.cli.recipe import _ensure_squashed_image
+    from nemotron.kit.packaging import SelfContainedPackager
 
     executor_type = env_config.get("executor", "local")
 
@@ -557,8 +562,20 @@ def _build_executor(env_config: dict, env_vars: dict[str, str]) -> Any:
         # Container image
         container_image = env_config.get("container_image") or env_config.get("container")
 
+        # Ensure container image is squashed on the cluster
+        if container_image and tunnel and remote_job_dir:
+            tunnel.connect()
+            container_image = _ensure_squashed_image(tunnel, container_image, remote_job_dir)
+
         # Partition (use run_partition if available for interactive)
         partition = env_config.get("run_partition") or env_config.get("partition", "interactive")
+
+        # Build packager to inline nemotron imports into a single script
+        # SelfContainedPackager creates minimal tarball: main.py + config.yaml
+        packager = SelfContainedPackager(
+            script_path=script_path,
+            train_path=str(config_path),
+        )
 
         # GPU job for deploy+eval
         return run.SlurmExecutor(
@@ -570,6 +587,7 @@ def _build_executor(env_config: dict, env_vars: dict[str, str]) -> Any:
             time=env_config.get("time", "04:00:00"),
             container_image=container_image,
             tunnel=tunnel,
+            packager=packager,
             env_vars=env_vars,
         )
 
@@ -587,25 +605,95 @@ def _run_attached_mode(
     """Run evaluation in attached mode (--run).
 
     CLI orchestrates the evaluation:
-    1. Poll for endpoint.json via SSH
+    1. Follow RayJob logs while waiting for endpoint.json
     2. Run evaluation via nemo-evaluator-launcher
-    3. Write done signal via SSH
-    4. Follow RayJob logs
+    3. Write done signal via nemo-run's SSH tunnel
+    4. Follow RayJob logs until shutdown complete
     """
-    try:
-        # Get SSH connection details
-        host = env_config.get("host")
-        user = env_config.get("user")
+    import threading
 
-        if not host or not user:
-            typer.echo("Error: SSH host and user required for --run mode", err=True)
+    # Get the tunnel from the ray_job's executor
+    tunnel = ray_job.backend.executor.tunnel
+
+    # Event to signal when endpoint is ready (stops log following)
+    endpoint_ready = threading.Event()
+    endpoint_data_holder: list = []  # Use list to store result from thread
+
+    def poll_for_endpoint():
+        """Background thread to poll for endpoint.json."""
+        tunnel.connect()
+        endpoint_file = f"{comms_base}/endpoint.json"
+        start_time = time.time()
+        timeout = 600
+
+        while not endpoint_ready.is_set():
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                return  # Timeout - main thread will handle
+
+            cmd = f"cat {endpoint_file} 2>/dev/null"
+            result = tunnel.run(cmd, warn=True, hide=True)
+
+            if result.return_code == 0 and result.stdout.strip():
+                try:
+                    data = json.loads(result.stdout)
+                    endpoint_data_holder.append(data)
+                    endpoint_ready.set()
+                    return
+                except json.JSONDecodeError:
+                    pass
+
+            time.sleep(ENDPOINT_POLL_INTERVAL)
+
+    try:
+        # Start background thread to poll for endpoint
+        poll_thread = threading.Thread(target=poll_for_endpoint, daemon=True)
+        poll_thread.start()
+
+        # Wait for Ray cluster to be ready before following logs
+        # This avoids "log file not found" warnings during cluster startup
+        console.print("[dim]Waiting for Ray cluster to start...[/dim]")
+        cluster_ready = False
+        cluster_wait_start = time.time()
+        cluster_timeout = 300  # 5 minutes to wait for cluster
+
+        while not cluster_ready and not endpoint_ready.is_set():
+            if time.time() - cluster_wait_start > cluster_timeout:
+                typer.echo("Error: Timeout waiting for Ray cluster to start", err=True)
+                raise typer.Exit(1)
+
+            status = ray_job.backend.status(display=False)
+            if status and status.get("ray_ready"):
+                cluster_ready = True
+                break
+            time.sleep(5)
+
+        # Follow logs until endpoint is ready
+        if not endpoint_ready.is_set():
+            console.print("[dim]Following deployment logs (waiting for model to be ready)...[/dim]")
+            try:
+                # Follow logs with periodic checks for endpoint readiness
+                while not endpoint_ready.is_set():
+                    # Follow logs for a short period, then check endpoint status
+                    try:
+                        ray_job.logs(follow=True, timeout=30)
+                    except Exception:
+                        pass  # Timeout or other error, continue checking
+
+                    if not poll_thread.is_alive() and not endpoint_ready.is_set():
+                        # Poll thread died without finding endpoint
+                        typer.echo("Error: Timeout waiting for endpoint", err=True)
+                        raise typer.Exit(1)
+
+            except KeyboardInterrupt:
+                raise
+
+        # Get endpoint data from background thread
+        if not endpoint_data_holder:
+            typer.echo("Error: No endpoint data received", err=True)
             raise typer.Exit(1)
 
-        # 1. Wait for endpoint.json
-        console.print("[dim]Waiting for model deployment to be ready...[/dim]")
-        endpoint_file = f"{comms_base}/endpoint.json"
-        endpoint_data = _wait_for_endpoint(host, user, endpoint_file, timeout=600)
-
+        endpoint_data = endpoint_data_holder[0]
         endpoint_url = endpoint_data["url"]
         model_id = endpoint_data.get("model_id", "nano3-eval")
         console.print(f"[green]Model deployed at: {endpoint_url}[/green]")
@@ -621,9 +709,9 @@ def _run_attached_mode(
         else:
             console.print("[dim]Evaluation completed (synchronous)[/dim]")
 
-        # 4. Write done signal
+        # 4. Write done signal via tunnel
         done_file = f"{comms_base}/done"
-        _write_done_signal(host, user, done_file)
+        _write_done_signal_via_tunnel(tunnel, done_file)
         console.print("[dim]Done signal sent to deployment[/dim]")
 
         # 5. Follow RayJob logs until complete
@@ -632,14 +720,11 @@ def _run_attached_mode(
 
     except KeyboardInterrupt:
         typer.echo("\n[info] Ctrl-C detected, cleaning up...")
+        endpoint_ready.set()  # Signal poll thread to stop
         try:
             # Write done signal to trigger deployment shutdown
             done_file = f"{comms_base}/done"
-            _write_done_signal(
-                env_config.get("host", ""),
-                env_config.get("user", ""),
-                done_file,
-            )
+            _write_done_signal_via_tunnel(tunnel, done_file)
         except Exception:
             pass
 
@@ -650,40 +735,6 @@ def _run_attached_mode(
             typer.echo(f"[warning] Failed to stop Ray cluster: {e}")
 
         raise typer.Exit(130)
-
-
-def _wait_for_endpoint(
-    host: str,
-    user: str,
-    endpoint_file: str,
-    timeout: int = 600,
-) -> dict:
-    """Poll for endpoint.json via SSH.
-
-    Returns:
-        Endpoint data dict with url, model_id, etc.
-    """
-    import subprocess
-
-    start_time = time.time()
-
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed > timeout:
-            typer.echo(f"Error: Timeout waiting for endpoint after {timeout}s", err=True)
-            raise typer.Exit(1)
-
-        # Check if file exists via SSH
-        cmd = ["ssh", f"{user}@{host}", f"cat {endpoint_file} 2>/dev/null"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0 and result.stdout.strip():
-            try:
-                return json.loads(result.stdout)
-            except json.JSONDecodeError:
-                pass  # File exists but not valid JSON yet
-
-        time.sleep(ENDPOINT_POLL_INTERVAL)
 
 
 def _run_evaluation(
@@ -909,9 +960,11 @@ def _wait_for_eval_completion(invocation_id: str | None, timeout: int = 14400) -
         time.sleep(EVAL_STATUS_POLL_INTERVAL)
 
 
-def _write_done_signal(host: str, user: str, done_file: str) -> None:
-    """Write done signal via SSH."""
-    import subprocess
+def _write_done_signal_via_tunnel(tunnel: Any, done_file: str) -> None:
+    """Write done signal via nemo-run's SSH tunnel.
 
-    cmd = ["ssh", f"{user}@{host}", f"touch {done_file}"]
-    subprocess.run(cmd, capture_output=True)
+    Uses the same tunnel that nemo-run uses for Ray cluster management.
+    """
+    # Create parent directory if needed, then touch the file
+    cmd = f"mkdir -p $(dirname {done_file}) && touch {done_file}"
+    tunnel.run(cmd, warn=True)

@@ -19,7 +19,7 @@
 run:
   model: ModelArtifact-rl:latest
   env:
-    container: nvcr.io/nvidian/nemo:25.09.rc11.mamba-conv-fix
+    container: nvcr.io/nvidian/nemo:25.11-nano-v3.rc2
   # Coordination files for deploy/eval communication
   # Note: comms.base_dir is auto-generated per job if not set
   comms:
