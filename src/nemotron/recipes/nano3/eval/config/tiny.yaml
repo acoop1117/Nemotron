@@ -1,0 +1,76 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Tiny configuration for quick testing of nano3 model evaluation
+# Usage: nemotron nano3 model eval /path/to/checkpoint -c tiny --run <profile>
+#        nemotron nano3 model eval -c tiny --run <profile> run.model=sft:latest
+
+# nemo-run execution settings and artifact references
+run:
+  model: ???  # Model artifact (e.g., sft:latest) or set via CLI --model_path
+  env:
+    container: nvcr.io/nvidian/nemo:25.09.rc11.mamba-conv-fix
+  # Coordination files for deploy/eval communication
+  # Note: comms.base_dir is auto-generated per job if not set
+  comms:
+    endpoint_file: endpoint.json
+    completion_file: done
+
+# Model configuration
+model:
+  checkpoint_path: ${art:model,path}
+  model_type: gpt
+
+# Deployment configuration - minimal setup for testing
+deploy:
+  host: "0.0.0.0"
+  port: 8000
+  num_gpus: 1
+  tensor_model_parallel_size: 1
+  expert_model_parallel_size: 1
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  model_id: nano3-eval-tiny
+  model_format: megatron
+  max_batch_size: 8
+  num_replicas: 1
+  num_cpus_per_replica: 4
+
+# Evaluation configuration - single task with limited samples
+# Uses run.env for SLURM settings and run.wandb for W&B export
+eval:
+  # SLURM execution settings (from env.toml profile)
+  execution:
+    hostname: ${run.env.host}
+    username: ${run.env.user}
+    account: ${run.env.account}
+    partition: ${run.env.partition}
+    output_dir: ${run.env.remote_job_dir}/eval_results
+
+  # W&B export settings (from env.toml [wandb] section)
+  export:
+    wandb:
+      entity: ${run.wandb.entity}
+      project: ${run.wandb.project}
+
+  # Evaluation tasks and parameters (minimal for testing)
+  tasks:
+    - name: hellaswag
+  parallelism: 4
+  max_retries: 3
+  request_timeout: 120
+  max_new_tokens: 1024
+  limit_samples: 100
+  extra:
+    tokenizer_backend: huggingface

@@ -31,5 +31,11 @@ model_app = typer.Typer(
 # Register import subgroup
 model_app.add_typer(import_app, name="import")
 
-# Register eval command
-model_app.command(name="eval")(eval_cmd)
+# Register eval command with extra args support for dotlist overrides
+model_app.command(
+    name="eval",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+    },
+)(eval_cmd)

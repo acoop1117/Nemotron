@@ -1,0 +1,78 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default configuration for nano3 model evaluation
+# Usage: nemotron nano3 model eval /path/to/checkpoint --run <profile>
+#        nemotron nano3 model eval --run <profile> run.model=sft:latest
+
+# nemo-run execution settings and artifact references
+run:
+  model: ???  # Model artifact (e.g., sft:latest) or set via CLI --model_path
+  env:
+    container: nvcr.io/nvidian/nemo:25.09.rc11.mamba-conv-fix
+  # Coordination files for deploy/eval communication
+  # Note: comms.base_dir is auto-generated per job if not set
+  comms:
+    endpoint_file: endpoint.json
+    completion_file: done
+
+# Model configuration
+model:
+  checkpoint_path: ${art:model,path}
+  model_type: gpt
+
+# Deployment configuration for Ray Serve
+deploy:
+  host: "0.0.0.0"
+  port: 8000
+  num_gpus: 8
+  tensor_model_parallel_size: 4
+  expert_model_parallel_size: 1
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  model_id: nano3-eval
+  model_format: megatron
+  max_batch_size: 32
+  num_replicas: 1
+  num_cpus_per_replica: 8
+
+# Evaluation configuration for nemo-evaluator-launcher
+# Uses run.env for SLURM settings and run.wandb for W&B export
+eval:
+  # SLURM execution settings (from env.toml profile)
+  execution:
+    hostname: ${run.env.host}
+    username: ${run.env.user}
+    account: ${run.env.account}
+    partition: ${run.env.partition}
+    output_dir: ${run.env.remote_job_dir}/eval_results
+
+  # W&B export settings (from env.toml [wandb] section)
+  export:
+    wandb:
+      entity: ${run.wandb.entity}
+      project: ${run.wandb.project}
+
+  # Evaluation tasks and parameters
+  tasks:
+    - name: adlr_arc_challenge_llama_25_shot
+    - name: adlr_winogrande_5_shot
+    - name: hellaswag
+    - name: piqa
+  parallelism: 32
+  max_retries: 5
+  request_timeout: 360
+  max_new_tokens: 8192
+  extra:
+    tokenizer_backend: huggingface
