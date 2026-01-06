@@ -33,6 +33,7 @@ dependencies = [
     "nemo_toolkit[asr]>=2.0.0",
     "Cython",
     "packaging",
+    "ipywebrtc>=0.6.0",
 ]
 
 [build-system]

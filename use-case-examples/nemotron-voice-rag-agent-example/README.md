@@ -5,11 +5,14 @@ Build a complete end-to-end AI agent that accepts voice input, retrieves multimo
 ## 🌟 Features
 
 - **Voice Input**: Nemotron Speech ASR for real-time speech-to-text
+- **LangChain 1.0 Agent**: Uses `langgraph.prebuilt.create_react_agent` with automatic looping
+- **RAG as a Tool**: On-demand retrieval - agent decides when to search knowledge base
+- **Automatic Agent Loop**: Can call tools multiple times until it has enough information
 - **Multimodal RAG**: Embed and retrieve both text and document images
 - **Smart Reranking**: Improve retrieval accuracy by 6-7% with cross-encoder reranking
 - **Image Understanding**: Describe visual content in context using vision-language models
 - **Long-Context Reasoning**: Generate responses with 1M token context window
-- **Safety Guardrails**: PII detection and content moderation in 20+ languages
+- **Safety Guardrails (Always On)**: PII detection and content moderation enforced on all inputs/outputs
 
 ## 📦 Models Used
 
@@ -85,21 +88,34 @@ Nemotron_MultiModalRAGAgent/
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Voice-Powered RAG Agent                          │
+│           Voice-Powered LangChain 1.0 Agent with RAG Tool           │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  🎤 Voice Input → Nemotron Speech ASR → Text Query                 │
 │                           ↓                                         │
-│  📚 Multimodal RAG                                                  │
-│     ├── Embed (llama-nemotron-embed-vl-1b-v2)                      │
-│     ├── Vector Search (FAISS)                                       │
-│     └── Rerank (llama-nemotron-rerank-vl-1b-v2)                    │
+│  🛡️ Input Safety Check (ALWAYS ENFORCED)                           │
 │                           ↓                                         │
-│  🖼️ Image Description (nemotron-nano-12b-v2-vl) [if images found]  │
+│  ┌─────────────────────────────────────────────────────┐            │
+│  │        LangGraph ReAct Agent Loop                   │            │
+│  │        (langgraph.prebuilt.create_react_agent)      │            │
+│  │                                                      │            │
+│  │  Agent (nemotron-3-nano-30b-a3b)                    │            │
+│  │     │                                                │            │
+│  │     ├─> Decide: Need more info?                     │            │
+│  │     │                                                │            │
+│  │     ├─> YES: Call RAG Tool ──┐                      │            │
+│  │     │   ├── Embed             │                      │            │
+│  │     │   ├── Vector Search     │                      │            │
+│  │     │   ├── Rerank            │  LOOP                │            │
+│  │     │   └── Describe Images   │  UNTIL               │            │
+│  │     │                          │  SATISFIED           │            │
+│  │     └─< Tool Result ──────────┘                      │            │
+│  │     │                                                │            │
+│  │     └─> NO: Generate final answer                   │            │
+│  │                                                      │            │
+│  └─────────────────────────────────────────────────────┘            │
 │                           ↓                                         │
-│  🧠 Response Generation (nemotron-3-nano-30b-a3b)                  │
-│                           ↓                                         │
-│  🛡️ Safety Check (Llama-3.1-Nemotron-Safety-Guard-8B-v3)           │
+│  🛡️ Output Safety Check (ALWAYS ENFORCED)                          │
 │                           ↓                                         │
 │  📝 Safe Text Output                                                │
 │                                                                     │
@@ -110,10 +126,14 @@ Nemotron_MultiModalRAGAgent/
 
 1. **Environment Setup**: Install dependencies and configure API keys
 2. **Multimodal RAG**: Build embeddings and vector store for text + images
-3. **Speech Input**: Add real-time speech transcription
+3. **Speech Input**: Add real-time speech transcription with Nemotron ASR
 4. **Safety Guardrails**: Implement PII detection and content moderation
-5. **Reasoning**: Generate context-aware responses
-6. **LangGraph Workflow**: Wire everything into a complete agent
+5. **Reasoning LLM**: Configure Nemotron for agent decision-making
+6. **LangChain 1.0 Agent**: Create ReAct agent with automatic looping
+   - Define RAG as a tool (not a fixed workflow step)
+   - Use `langgraph.prebuilt.create_react_agent`
+   - Agent automatically loops until it can answer
+   - Safety enforced on all inputs and outputs
 
 ## 🎯 Use Cases
 
@@ -127,7 +147,8 @@ Nemotron_MultiModalRAGAgent/
 - [NVIDIA Nemotron Models](https://huggingface.co/nvidia)
 - [NVIDIA NIM](https://developer.nvidia.com/nim)
 - [NVIDIA NeMo Framework](https://github.com/NVIDIA/NeMo)
-- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [LangGraph create_react_agent Docs](https://reference.langchain.com/python/langgraph/agents/)
+- [How to Use Prebuilt ReAct Agent](https://prodsens.live/2025/01/18/how-to-use-the-prebuilt-react-agent-in-langgraph/)
 - [LangChain Documentation](https://docs.langchain.com/)
 
 ## 📄 License
