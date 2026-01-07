@@ -41,19 +41,32 @@ Build a complete end-to-end AI agent that accepts voice input, retrieves multimo
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/NVIDIA/Nemotron_MultiModalRAGAgent.git
-cd Nemotron_MultiModalRAGAgent
+git clone https://github.com/NVIDIA-NeMo/Nemotron.git
+cd Nemotron/use-case-examples/nemotron-voice-rag-agent-example
 ```
 
 ### 2. Set Up Environment
 
+**Option A: Standard CUDA (RTX, A100, etc.):**
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv sync --extra cuda --index-url https://download.pytorch.org/whl/cu124
+```
 
-# Install dependencies
-pip install -r requirements.txt
+**Option B: DGX Spark (GB10):**
+```bash
+uv sync --extra cuda --index-url https://download.pytorch.org/whl/cu130
+```
+
+**Note:** Since `nemo_toolkit[asr]` may have specific PyTorch requirements, if you encounter dependency conflicts, install PyTorch first:
+
+```bash
+# For Spark/GB10 systems
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+uv sync
+
+# For standard CUDA systems
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+uv sync
 ```
 
 ### 3. Configure API Key
@@ -73,7 +86,7 @@ jupyter notebook voice_rag_agent_tutorial.ipynb
 ## 📁 Project Structure
 
 ```
-Nemotron_MultiModalRAGAgent/
+nemotron-voice-rag-agent-example/
 ├── voice_rag_agent_tutorial.ipynb  # Main tutorial notebook
 ├── README.md                        # This file
 ├── requirements.txt                 # Python dependencies
@@ -91,31 +104,31 @@ Nemotron_MultiModalRAGAgent/
 │           Voice-Powered LangChain 1.0 Agent with RAG Tool           │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  🎤 Voice Input → Nemotron Speech ASR → Text Query                 │
+│  🎤 Voice Input → Nemotron Speech ASR → Text Query                  │
 │                           ↓                                         │
-│  🛡️ Input Safety Check (ALWAYS ENFORCED)                           │
+│  🛡️ Input Safety Check (ALWAYS ENFORCED)                            │
 │                           ↓                                         │
 │  ┌─────────────────────────────────────────────────────┐            │
 │  │        LangGraph ReAct Agent Loop                   │            │
 │  │        (langgraph.prebuilt.create_react_agent)      │            │
-│  │                                                      │            │
+│  │                                                     │            │
 │  │  Agent (nemotron-3-nano-30b-a3b)                    │            │
-│  │     │                                                │            │
+│  │     │                                               │            │
 │  │     ├─> Decide: Need more info?                     │            │
-│  │     │                                                │            │
+│  │     │                                               │            │
 │  │     ├─> YES: Call RAG Tool ──┐                      │            │
-│  │     │   ├── Embed             │                      │            │
-│  │     │   ├── Vector Search     │                      │            │
-│  │     │   ├── Rerank            │  LOOP                │            │
-│  │     │   └── Describe Images   │  UNTIL               │            │
-│  │     │                          │  SATISFIED           │            │
-│  │     └─< Tool Result ──────────┘                      │            │
-│  │     │                                                │            │
+│  │     │   ├── Embed            │                      │            │
+│  │     │   ├── Vector Search    │                      │            │
+│  │     │   ├── Rerank           │  LOOP                │            │
+│  │     │   └── Describe Images  │  UNTIL               │            │
+│  │     │                        │  SATISFIED           │            │
+│  │     └─< Tool Result ─────────┘                      │            │
+│  │     │                                               │            │
 │  │     └─> NO: Generate final answer                   │            │
-│  │                                                      │            │
+│  │                                                     │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                           ↓                                         │
-│  🛡️ Output Safety Check (ALWAYS ENFORCED)                          │
+│  🛡️ Output Safety Check (ALWAYS ENFORCED)                           │
 │                           ↓                                         │
 │  📝 Safe Text Output                                                │
 │                                                                     │
@@ -142,14 +155,6 @@ Nemotron_MultiModalRAGAgent/
 - **Compliance**: Detect PII and enforce content policies
 - **Research**: Query scientific papers with visual content
 
-## 📚 Resources
-
-- [NVIDIA Nemotron Models](https://huggingface.co/nvidia)
-- [NVIDIA NIM](https://developer.nvidia.com/nim)
-- [NVIDIA NeMo Framework](https://github.com/NVIDIA/NeMo)
-- [LangGraph create_react_agent Docs](https://reference.langchain.com/python/langgraph/agents/)
-- [How to Use Prebuilt ReAct Agent](https://prodsens.live/2025/01/18/how-to-use-the-prebuilt-react-agent-in-langgraph/)
-- [LangChain Documentation](https://docs.langchain.com/)
 
 ## 📄 License
 
@@ -164,5 +169,5 @@ Contributions are welcome! Please read our contributing guidelines before submit
 ## 📬 Support
 
 - [NVIDIA Developer Forums](https://forums.developer.nvidia.com/)
-- [GitHub Issues](https://github.com/NVIDIA/Nemotron_MultiModalRAGAgent/issues)
+- [GitHub Issues](https://github.com/NVIDIA-NeMo/Nemotron/issues)
 
