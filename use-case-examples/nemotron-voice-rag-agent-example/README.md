@@ -41,19 +41,15 @@ Build a complete end-to-end AI agent that accepts voice input, retrieves multimo
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/NVIDIA/Nemotron_MultiModalRAGAgent.git
-cd Nemotron_MultiModalRAGAgent
+git clone https://github.com/NVIDIA-NeMo/Nemotron.git
+cd Nemotron/use-case-examples/nemotron-voice-rag-agent-example
 ```
 
 ### 2. Set Up Environment
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (uv will automatically create and manage the virtual environment)
+uv sync
 ```
 
 ### 3. Configure API Key
