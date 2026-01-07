@@ -91,31 +91,31 @@ Nemotron_MultiModalRAGAgent/
 │           Voice-Powered LangChain 1.0 Agent with RAG Tool           │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  🎤 Voice Input → Nemotron Speech ASR → Text Query                 │
+│  🎤 Voice Input → Nemotron Speech ASR → Text Query                  │
 │                           ↓                                         │
-│  🛡️ Input Safety Check (ALWAYS ENFORCED)                           │
+│  🛡️ Input Safety Check (ALWAYS ENFORCED)                            │
 │                           ↓                                         │
 │  ┌─────────────────────────────────────────────────────┐            │
 │  │        LangGraph ReAct Agent Loop                   │            │
 │  │        (langgraph.prebuilt.create_react_agent)      │            │
-│  │                                                      │            │
+│  │                                                     │            │
 │  │  Agent (nemotron-3-nano-30b-a3b)                    │            │
-│  │     │                                                │            │
+│  │     │                                               │            │
 │  │     ├─> Decide: Need more info?                     │            │
-│  │     │                                                │            │
+│  │     │                                               │            │
 │  │     ├─> YES: Call RAG Tool ──┐                      │            │
-│  │     │   ├── Embed             │                      │            │
-│  │     │   ├── Vector Search     │                      │            │
-│  │     │   ├── Rerank            │  LOOP                │            │
-│  │     │   └── Describe Images   │  UNTIL               │            │
-│  │     │                          │  SATISFIED           │            │
-│  │     └─< Tool Result ──────────┘                      │            │
-│  │     │                                                │            │
+│  │     │   ├── Embed            │                      │            │
+│  │     │   ├── Vector Search    │                      │            │
+│  │     │   ├── Rerank           │  LOOP                │            │
+│  │     │   └── Describe Images  │  UNTIL               │            │
+│  │     │                        │  SATISFIED           │            │
+│  │     └─< Tool Result ─────────┘                      │            │
+│  │     │                                               │            │
 │  │     └─> NO: Generate final answer                   │            │
-│  │                                                      │            │
+│  │                                                     │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                           ↓                                         │
-│  🛡️ Output Safety Check (ALWAYS ENFORCED)                          │
+│  🛡️ Output Safety Check (ALWAYS ENFORCED)                           │
 │                           ↓                                         │
 │  📝 Safe Text Output                                                │
 │                                                                     │
@@ -142,14 +142,6 @@ Nemotron_MultiModalRAGAgent/
 - **Compliance**: Detect PII and enforce content policies
 - **Research**: Query scientific papers with visual content
 
-## 📚 Resources
-
-- [NVIDIA Nemotron Models](https://huggingface.co/nvidia)
-- [NVIDIA NIM](https://developer.nvidia.com/nim)
-- [NVIDIA NeMo Framework](https://github.com/NVIDIA/NeMo)
-- [LangGraph create_react_agent Docs](https://reference.langchain.com/python/langgraph/agents/)
-- [How to Use Prebuilt ReAct Agent](https://prodsens.live/2025/01/18/how-to-use-the-prebuilt-react-agent-in-langgraph/)
-- [LangChain Documentation](https://docs.langchain.com/)
 
 ## 📄 License
 
@@ -164,5 +156,5 @@ Contributions are welcome! Please read our contributing guidelines before submit
 ## 📬 Support
 
 - [NVIDIA Developer Forums](https://forums.developer.nvidia.com/)
-- [GitHub Issues](https://github.com/NVIDIA/Nemotron_MultiModalRAGAgent/issues)
+- [GitHub Issues](https://github.com/NVIDIA-NeMo/Nemotron/issues)
 
