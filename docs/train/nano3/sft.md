@@ -216,20 +216,29 @@ $ uv run nemotron nano3 sft --run YOUR-CLUSTER
 
 > **Note**: The `--run YOUR-CLUSTER` flag submits jobs via [NeMo-Run](../nemo-run.md). See [Execution through NeMo-Run](../nemo-run.md) for setup.
 
-#### Direct Script Execution
+#### Direct Script Execution (Megatron-Bridge)
 
-Inside a container on a compute node:
+For direct execution outside this CLI, use the scripts in the [Megatron-Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) repository:
 
 ```bash
-# Data preparation
-uv run python data_prep.py --config config/data_prep.yaml
+# Clone the repository and checkout the nano-v3 branch
+git clone https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
+cd Megatron-Bridge
+git checkout nano-v3
 
-# Training (single node)
-uv run python train.py --config config/default.yaml
+# Run fine-tuning (inside container on compute node)
+python examples/recipes/nemotron_3/finetune_nemotron_3_nano.py \
+    --per-split-data-args-path /path/to/data_args.json \
+    --tokenizer-model /path/to/tokenizer.model
 
-# Training (distributed)
-uv run torchrun --nproc_per_node=8 train.py --config config/default.yaml
+# With config file overrides
+python examples/recipes/nemotron_3/finetune_nemotron_3_nano.py \
+    --config-file /path/to/overrides.yaml \
+    --per-split-data-args-path /path/to/data_args.json \
+    --tokenizer-model /path/to/tokenizer.model
 ```
+
+See the [Megatron-Bridge Nemotron 3 documentation](https://docs.nvidia.com/nemo/megatron-bridge/latest/models/llm/nemotron3.html) for detailed configuration options.
 
 ### Configuration
 
