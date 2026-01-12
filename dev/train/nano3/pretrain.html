@@ -809,189 +809,69 @@ window.addEventListener("load", load);
   <section class="tex2jax_ignore mathjax_ignore" id="stage-0-pretraining">
 <h1>Stage 0: Pretraining<a class="headerlink" href="#stage-0-pretraining" title="Link to this heading">#</a></h1>
 <p>This stage trains the base Nemotron 3 Nano model from scratch on 25 trillion tokens using <a class="reference internal" href="../nvidia-stack.html#megatron-bridge"><span class="std std-ref">Megatron-Bridge</span></a>.</p>
+<p>Nemotron 3 Nano is a <strong>hybrid Mamba-Transformer-MoE</strong> model with 52 layers, combining state-space models for efficiency, attention for global context, and mixture-of-experts for capacity. Key innovations include aux-loss-free MoE balancing and a two-phase data curriculum.</p>
 <blockquote>
 <div><p><strong>Open-Source Data Only</strong>: This recipe uses exclusively open-sourced training data from the <a class="reference external" href="https://huggingface.co/collections/nvidia/nemotron-pre-training-datasets">Nemotron Pre-training Datasets</a> collection, which is a subset of the full data used to train the released model. The recipe includes datasets from Nemotron-CC-Math-v1, Nemotron-CC-v2, Nemotron-CC-v2.1, and Nemotron-Pretraining-Specialized-v1. Results will differ from the benchmarks in the <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">tech report</a>. Use this recipe as a reference implementation to apply the methodology with your own data.</p>
 </div></blockquote>
-<section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
-<div class="termy">
-<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">// 1. Prepare data (tokenize to bin/idx format)</span>
-<span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>data<span class="w"> </span>prep<span class="w"> </span>pretrain<span class="w"> </span>--run<span class="w"> </span>YOUR-CLUSTER
-
-<span class="go">// 2. Run pretraining</span>
-<span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>--run<span class="w"> </span>YOUR-CLUSTER
-</pre></div>
-</div>
-</div>
+<hr class="docutils" />
+<section id="training-methodology">
+<h2>Training Methodology<a class="headerlink" href="#training-methodology" title="Link to this heading">#</a></h2>
 <blockquote>
-<div><p><strong>Note</strong>: The <code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">YOUR-CLUSTER</span></code> flag submits jobs via <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>. See <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">Execution through NeMo-Run</span></a> for setup.</p>
+<div><p><strong>Training Framework</strong>: Pretraining is implemented using <a class="reference external" href="https://docs.nvidia.com/nemo/megatron-bridge/latest/">Megatron-Bridge</a>, which provides the training loop, distributed training primitives, and checkpoint management. See <a class="reference external" href="https://docs.nvidia.com/nemo/megatron-bridge/latest/training/entry-points.html">Training Entry Points</a> for details on how <code class="docutils literal notranslate"><span class="pre">pretrain()</span></code> works.</p>
+<p>For complete methodology, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2</a>.</p>
 </div></blockquote>
-<section id="direct-script-execution">
-<h3>Direct Script Execution<a class="headerlink" href="#direct-script-execution" title="Link to this heading">#</a></h3>
-<p>Inside a container on a compute node:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Data preparation</span>
-uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>data_prep.py<span class="w"> </span>--config<span class="w"> </span>config/data_prep.yaml
-
-<span class="c1"># Training (single node)</span>
-uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>train.py<span class="w"> </span>--config<span class="w"> </span>config/default.yaml
-
-<span class="c1"># Training (distributed)</span>
-uv<span class="w"> </span>run<span class="w"> </span>torchrun<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">8</span><span class="w"> </span>train.py<span class="w"> </span>--config<span class="w"> </span>config/default.yaml
-</pre></div>
-</div>
-</section>
-</section>
-<section id="configuration">
-<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h2>
+<section id="model-architecture">
+<h3>Model Architecture<a class="headerlink" href="#model-architecture" title="Link to this heading">#</a></h3>
+<p>Nemotron 3 Nano uses a <strong>hybrid Mamba-Transformer-MoE</strong> architecture with 52 layers:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>File</p></th>
-<th class="head"><p>Purpose</p></th>
+<tr class="row-odd"><th class="head"><p>Layer Type</p></th>
+<th class="head"><p>Count</p></th>
+<th class="head"><p>Role</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/default.yaml</span></code></p></td>
-<td><p>Production configuration</p></td>
+<tr class="row-even"><td><p>Mamba-2</p></td>
+<td><p>23</p></td>
+<td><p>Efficient sequence modeling via state space</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">config/data_prep.yaml</span></code></p></td>
-<td><p>Data preparation settings</p></td>
+<tr class="row-odd"><td><p>Attention</p></td>
+<td><p>6</p></td>
+<td><p>Global context at key positions</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/data_blend_raw.json</span></code></p></td>
-<td><p>Dataset blend definition</p></td>
+<tr class="row-even"><td><p>MoE</p></td>
+<td><p>23</p></td>
+<td><p>Sparse computation with 8 experts per layer</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-</section>
-<section id="data-preparation">
-<h2>Data Preparation<a class="headerlink" href="#data-preparation" title="Link to this heading">#</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">data_prep.py</span></code> script tokenizes raw text datasets into Megatron’s binary format. See <a class="reference internal" href="../data-prep.html"><span class="std std-doc">Data Preparation Module</span></a> for detailed documentation.</p>
-<section id="cli-command">
-<h3>CLI Command<a class="headerlink" href="#cli-command" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>data<span class="w"> </span>prep<span class="w"> </span>pretrain<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
-</pre></div>
-</div>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
-<td><p>Execute on Slurm via <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--sample</span> <span class="pre">N</span></code></p></td>
-<td><p>Limit rows per dataset (for testing)</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--force</span></code></p></td>
-<td><p>Force re-run, ignoring cache</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="output">
-<h3>Output<a class="headerlink" href="#output" title="Link to this heading">#</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>output/nano3/stage0_pretrain/
-├── train/
-│   ├── data_00000.bin
-│   ├── data_00000.idx
-│   └── ...
-├── valid/
-├── test/
-└── blend.json
-</pre></div>
-</div>
-<p>The output is registered as a <a class="reference internal" href="../artifacts.html"><span class="std std-doc">W&amp;B Artifact</span></a> (<code class="docutils literal notranslate"><span class="pre">DataBlendsArtifact-pretrain</span></code>) for lineage tracking.</p>
-</section>
-</section>
-<section id="training">
-<h2>Training<a class="headerlink" href="#training" title="Link to this heading">#</a></h2>
-<section id="id1">
-<h3>CLI Command<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span><span class="o">[</span>options<span class="o">]</span><span class="w"> </span><span class="o">[</span>overrides...<span class="o">]</span>
-</pre></div>
-</div>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
-<td><p>Attached—submits and waits, streaming logs (<a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>)</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--batch</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
-<td><p>Detached—submits and exits immediately (<a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>)</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--dry-run</span></code></p></td>
-<td><p>Preview execution plan</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">key=value</span></code></p></td>
-<td><p>Override config values (<a class="reference internal" href="../cli.html#dotlist-overrides"><span class="std std-ref">CLI Framework</span></a>)</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="override-examples">
-<h3>Override Examples<a class="headerlink" href="#override-examples" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># More training iterations</span>
-uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>train.train_iters<span class="o">=</span><span class="m">5000</span>
-
-<span class="c1"># Larger batch size</span>
-uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>train.global_batch_size<span class="o">=</span><span class="m">64</span>
-
-<span class="c1"># Different checkpoint location</span>
-uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>checkpoint.save<span class="o">=</span>/path/to/checkpoints
-</pre></div>
-</div>
-</section>
-</section>
-<section id="running-with-nemo-run">
-<h2>Running with NeMo-Run<a class="headerlink" href="#running-with-nemo-run" title="Link to this heading">#</a></h2>
-<p>Configure execution profiles in <code class="docutils literal notranslate"><span class="pre">env.toml</span></code>:</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[wandb]</span>
-<span class="n">project</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;nemotron&quot;</span>
-<span class="n">entity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;YOUR-TEAM&quot;</span>
-
-<span class="k">[YOUR-CLUSTER]</span>
-<span class="n">executor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;slurm&quot;</span>
-<span class="n">account</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;YOUR-ACCOUNT&quot;</span>
-<span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;batch&quot;</span>
-<span class="n">nodes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
-<span class="n">ntasks_per_node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
-<span class="n">gpus_per_node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
-<span class="n">mounts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;/lustre:/lustre&quot;</span><span class="p">]</span>
-</pre></div>
-</div>
-<p>See <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">Execution through NeMo-Run</span></a> for complete configuration options.</p>
-</section>
-<section id="artifact-lineage">
-<h2>Artifact Lineage<a class="headerlink" href="#artifact-lineage" title="Link to this heading">#</a></h2>
+<p>The hybrid pattern interleaves these layer types to balance efficiency and capability:</p>
 <pre  class="mermaid">
         %%{init: {'theme': 'base', 'themeVariables': { 'primaryBorderColor': '#333333', 'lineColor': '#333333', 'primaryTextColor': '#333333'}}}%%
-flowchart TB
-    raw[&quot;Raw Text Data&quot;] --&gt; dp[&quot;data_prep.py&quot;]
-    dp --&gt; data[&quot;DataBlendsArtifact-pretrain&lt;br/&gt;(bin/idx files + blend.json)&quot;]
-    data --&gt; train[&quot;train.py&quot;]
-    train --&gt; model[&quot;ModelArtifact-pretrain&lt;br/&gt;(checkpoint)&quot;]
-    model --&gt; next[&quot;Stage 1: SFT&quot;]
+flowchart LR
+    subgraph layers[&quot;52 Layers&quot;]
+        direction LR
+        m1[&quot;Mamba-2&quot;] --&gt; m2[&quot;Mamba-2&quot;] --&gt; a1[&quot;Attention&quot;]
+        a1 --&gt; moe1[&quot;MoE&quot;] --&gt; m3[&quot;Mamba-2&quot;] --&gt; m4[&quot;...&quot;]
+    end
 
-    style raw fill:#e1f5fe,stroke:#2196f3
-    style dp fill:#e1f5fe,stroke:#2196f3
-    style data fill:#e1f5fe,stroke:#2196f3
-    style train fill:#e1f5fe,stroke:#2196f3
-    style model fill:#e1f5fe,stroke:#2196f3
-    style next fill:#f3e5f5,stroke:#9c27b0
-    </pre></section>
-<section id="methodology">
-<h2>Methodology<a class="headerlink" href="#methodology" title="Link to this heading">#</a></h2>
+    style m1 fill:#e8f5e9,stroke:#4caf50
+    style m2 fill:#e8f5e9,stroke:#4caf50
+    style m3 fill:#e8f5e9,stroke:#4caf50
+    style a1 fill:#e3f2fd,stroke:#2196f3
+    style moe1 fill:#fff3e0,stroke:#ff9800
+    </pre><p><strong>Key design choices:</strong></p>
+<ul class="simple">
+<li><p><strong>Mamba-2 layers</strong> provide linear-time sequence processing, enabling efficient inference on long contexts</p></li>
+<li><p><strong>Attention layers</strong> are placed at strategic intervals (every ~8 layers) for global information mixing</p></li>
+<li><p><strong>MoE layers</strong> use 128 routed experts plus 1 shared expert, with 6 experts activated per token, keeping active parameters at ~3.5B while total parameters reach ~31.6B</p></li>
+</ul>
 <blockquote>
-<div><p>For complete methodology, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2</a>.</p>
+<div><p>For architecture rationale, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2.1</a>.</p>
+<p>For implementation details, see <a class="reference external" href="https://docs.nvidia.com/nemo/megatron-bridge/latest/models/llm/nemotron3.html">Megatron-Bridge Nemotron 3</a>.</p>
 </div></blockquote>
+</section>
 <section id="pretraining-data">
 <h3>Pretraining Data<a class="headerlink" href="#pretraining-data" title="Link to this heading">#</a></h3>
 <p>The pretraining corpus comprises four main dataset families:</p>
@@ -1024,28 +904,48 @@ flowchart TB
 </section>
 <section id="data-mixture">
 <h3>Data Mixture<a class="headerlink" href="#data-mixture" title="Link to this heading">#</a></h3>
-<p>Two-phase curriculum approach:</p>
+<p>Training follows a two-phase curriculum that transitions from broad coverage to focused quality:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Phase</p></th>
 <th class="head"><p>Tokens</p></th>
 <th class="head"><p>Focus</p></th>
+<th class="head"><p>Strategy</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Phase 1</p></td>
 <td><p>23.5T</p></td>
-<td><p>High diversity across web, code, math, multilingual</p></td>
+<td><p>Diversity</p></td>
+<td><p>Broad coverage across all data sources</p></td>
 </tr>
 <tr class="row-odd"><td><p>Phase 2</p></td>
 <td><p>1.5T</p></td>
-<td><p>High-quality data with curated sources</p></td>
+<td><p>Quality</p></td>
+<td><p>Increased weight on high-quality and STEM data</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p><strong>Phase 1: Foundation Building</strong></p>
+<ul class="simple">
+<li><p>Uses all dataset families with balanced weights</p></li>
+<li><p>Emphasizes diversity: web (multiple quality tiers), code, math, multilingual</p></li>
+<li><p>Builds broad knowledge base and language understanding</p></li>
+</ul>
+<p><strong>Phase 2: Quality Refinement</strong></p>
+<ul class="simple">
+<li><p>Increases sampling from high-quality sources:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">High-Quality</span></code> and <code class="docutils literal notranslate"><span class="pre">High-Quality-Synthetic</span></code> subsets</p></li>
+<li><p>Nemotron-Pretraining-Specialized-v1 (STEM, math textbooks, scientific coding)</p></li>
+</ul>
+</li>
+<li><p>Reduces low-quality web content</p></li>
+<li><p>Sharpens model capabilities on curated data</p></li>
+</ul>
 <blockquote>
-<div><p>For mixture strategy, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2.3</a>.</p>
+<div><p>For mixture strategy details, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2.3</a>.</p>
 </div></blockquote>
 </section>
 <section id="hyperparameters">
@@ -1061,16 +961,16 @@ flowchart TB
 <td><p>25 trillion</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Batch Size</strong></p></td>
-<td><p>8192 sequences</p></td>
+<td><p>3,072 sequences</p></td>
 </tr>
 <tr class="row-even"><td><p><strong>Sequence Length</strong></p></td>
-<td><p>4096 tokens</p></td>
+<td><p>8,192 tokens</p></td>
 </tr>
-<tr class="row-odd"><td><p><strong>Learning Rate</strong></p></td>
-<td><p>1e-4 (stable) → 1e-5 (decay)</p></td>
+<tr class="row-odd"><td><p><strong>Peak Learning Rate</strong></p></td>
+<td><p>1e-3</p></td>
 </tr>
-<tr class="row-even"><td><p><strong>Warmup</strong></p></td>
-<td><p>80% of training (20T tokens)</p></td>
+<tr class="row-even"><td><p><strong>Minimum Learning Rate</strong></p></td>
+<td><p>1e-5</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Optimizer</strong></p></td>
 <td><p>AdamW (β₁=0.9, β₂=0.95)</p></td>
@@ -1084,8 +984,56 @@ flowchart TB
 </tbody>
 </table>
 </div>
+<p><strong>Learning Rate Schedule:</strong></p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Phase</p></th>
+<th class="head"><p>Tokens</p></th>
+<th class="head"><p>LR</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Warmup</p></td>
+<td><p>8.4B</p></td>
+<td><p>0 → 1e-3</p></td>
+</tr>
+<tr class="row-odd"><td><p>Stable</p></td>
+<td><p>20T (80%)</p></td>
+<td><p>1e-3</p></td>
+</tr>
+<tr class="row-even"><td><p>Decay</p></td>
+<td><p>5T (20%)</p></td>
+<td><p>1e-3 → 1e-5</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The warmup is token-based (8.4B tokens), not percentage-based. The stable phase maintains peak LR for 80% of training before cosine decay.</p>
 <blockquote>
 <div><p>For hyperparameter rationale, see <a class="reference external" href="https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf">Tech Report Section 2.4</a>.</p>
+</div></blockquote>
+</section>
+<section id="moe-load-balancing">
+<h3>MoE Load Balancing<a class="headerlink" href="#moe-load-balancing" title="Link to this heading">#</a></h3>
+<p>Nemotron 3 Nano uses the <strong>aux-loss-free load balancing</strong> strategy from DeepSeek, avoiding the auxiliary losses traditionally used to balance expert utilization.</p>
+<p><strong>Why aux-loss-free?</strong></p>
+<p>Traditional MoE training adds an auxiliary loss term to encourage balanced routing. However, this:</p>
+<ul class="simple">
+<li><p>Adds a hyperparameter (aux loss weight) that’s hard to tune</p></li>
+<li><p>Can conflict with the main training objective</p></li>
+<li><p>May hurt model quality at scale</p></li>
+</ul>
+<p><strong>How it works:</strong></p>
+<p>Instead of auxiliary losses, the router uses <strong>bias terms</strong> that are adjusted dynamically:</p>
+<ul class="simple">
+<li><p>Track expert utilization over a sliding window</p></li>
+<li><p>Increase bias for underutilized experts (more tokens routed to them)</p></li>
+<li><p>Decrease bias for overloaded experts</p></li>
+<li><p>No gradient flows through the bias adjustment</p></li>
+</ul>
+<p>This achieves balanced expert utilization without interfering with the main loss function.</p>
+<blockquote>
+<div><p>For details, see the <a class="reference external" href="https://arxiv.org/abs/2408.15664">Auxiliary-Loss-Free Load Balancing paper</a>.</p>
 </div></blockquote>
 </section>
 <section id="long-context-extension">
@@ -1118,14 +1066,242 @@ flowchart TB
 </div></blockquote>
 </section>
 </section>
-<section id="open-source-data">
-<h2>Open-Source Data<a class="headerlink" href="#open-source-data" title="Link to this heading">#</a></h2>
+<hr class="docutils" />
+<section id="recipe-execution">
+<h2>Recipe Execution<a class="headerlink" href="#recipe-execution" title="Link to this heading">#</a></h2>
+<section id="quick-start">
+<h3>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h3>
+<div class="termy">
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">// 1. Prepare data (tokenize to bin/idx format)</span>
+<span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>data<span class="w"> </span>prep<span class="w"> </span>pretrain<span class="w"> </span>--run<span class="w"> </span>YOUR-CLUSTER
+
+<span class="go">// 2. Run pretraining</span>
+<span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>--run<span class="w"> </span>YOUR-CLUSTER
+</pre></div>
+</div>
+</div>
 <blockquote>
-<div><p><strong>Note</strong>: This recipe trains exclusively on the open-sourced subset of pretraining data. Results will differ from the tech report benchmarks, which used additional proprietary data.</p>
+<div><p><strong>Note</strong>: The <code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">YOUR-CLUSTER</span></code> flag submits jobs via <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>. See <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">Execution through NeMo-Run</span></a> for setup.</p>
+</div></blockquote>
+<section id="direct-script-execution-megatron-bridge">
+<h4>Direct Script Execution (Megatron-Bridge)<a class="headerlink" href="#direct-script-execution-megatron-bridge" title="Link to this heading">#</a></h4>
+<p>For direct execution outside this CLI, use the scripts in the <a class="reference external" href="https://github.com/NVIDIA-NeMo/Megatron-Bridge">Megatron-Bridge</a> repository:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Clone the repository and checkout the nano-v3 branch</span>
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
+<span class="nb">cd</span><span class="w"> </span>Megatron-Bridge
+git<span class="w"> </span>checkout<span class="w"> </span>nano-v3
+
+<span class="c1"># Run pretraining (inside container on compute node)</span>
+python<span class="w"> </span>examples/recipes/nemotron_3/pretrain_nemotron_3_nano.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--per-split-data-args-path<span class="w"> </span>/path/to/data_args.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--tokenizer-model<span class="w"> </span>/path/to/tokenizer.model
+
+<span class="c1"># With config file overrides</span>
+python<span class="w"> </span>examples/recipes/nemotron_3/pretrain_nemotron_3_nano.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--config-file<span class="w"> </span>/path/to/overrides.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--per-split-data-args-path<span class="w"> </span>/path/to/data_args.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--tokenizer-model<span class="w"> </span>/path/to/tokenizer.model
+</pre></div>
+</div>
+<p>See the <a class="reference external" href="https://docs.nvidia.com/nemo/megatron-bridge/latest/models/llm/nemotron3.html">Megatron-Bridge Nemotron 3 documentation</a> for detailed configuration options.</p>
+</section>
+</section>
+<section id="configuration">
+<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>File</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/default.yaml</span></code></p></td>
+<td><p>Production configuration</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">config/data_prep.yaml</span></code></p></td>
+<td><p>Data preparation settings</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/data_blend_raw.json</span></code></p></td>
+<td><p>Dataset blend definition</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Blend Configuration</strong></p>
+<p>Data blends are defined in <code class="docutils literal notranslate"><span class="pre">config/data_prep/data_blend_raw.json</span></code>. Each entry specifies:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dataset-name&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hf://nvidia/...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;subset&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subset-name&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;weight&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Weights control sampling probability during data preparation. Phase transitions are implemented by using different blend configurations.</p>
+</section>
+<section id="data-preparation">
+<h3>Data Preparation<a class="headerlink" href="#data-preparation" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">data_prep.py</span></code> script tokenizes raw text datasets into Megatron’s binary format. See <a class="reference internal" href="../data-prep.html"><span class="std std-doc">Data Preparation Module</span></a> for detailed documentation.</p>
+<section id="cli-command">
+<h4>CLI Command<a class="headerlink" href="#cli-command" title="Link to this heading">#</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>data<span class="w"> </span>prep<span class="w"> </span>pretrain<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+</pre></div>
+</div>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
+<td><p>Execute on Slurm via <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--sample</span> <span class="pre">N</span></code></p></td>
+<td><p>Limit rows per dataset (for testing)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--force</span></code></p></td>
+<td><p>Force re-run, ignoring cache</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="output">
+<h4>Output<a class="headerlink" href="#output" title="Link to this heading">#</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>output/nano3/stage0_pretrain/
+├── train/
+│   ├── data_00000.bin
+│   ├── data_00000.idx
+│   └── ...
+├── valid/
+├── test/
+└── blend.json
+</pre></div>
+</div>
+<p>The output is registered as a <a class="reference internal" href="../artifacts.html"><span class="std std-doc">W&amp;B Artifact</span></a> (<code class="docutils literal notranslate"><span class="pre">DataBlendsArtifact-pretrain</span></code>) for lineage tracking.</p>
+</section>
+</section>
+<section id="training">
+<h3>Training<a class="headerlink" href="#training" title="Link to this heading">#</a></h3>
+<section id="id1">
+<h4>CLI Command<a class="headerlink" href="#id1" title="Link to this heading">#</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span><span class="o">[</span>options<span class="o">]</span><span class="w"> </span><span class="o">[</span>overrides...<span class="o">]</span>
+</pre></div>
+</div>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--run</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
+<td><p>Attached—submits and waits, streaming logs (<a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--batch</span> <span class="pre">&lt;profile&gt;</span></code></p></td>
+<td><p>Detached—submits and exits immediately (<a class="reference internal" href="../nemo-run.html"><span class="std std-doc">NeMo-Run</span></a>)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--dry-run</span></code></p></td>
+<td><p>Preview execution plan</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">key=value</span></code></p></td>
+<td><p>Override config values (<a class="reference internal" href="../cli.html#dotlist-overrides"><span class="std std-ref">CLI Framework</span></a>)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="override-examples">
+<h4>Override Examples<a class="headerlink" href="#override-examples" title="Link to this heading">#</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># More training iterations</span>
+uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>train.train_iters<span class="o">=</span><span class="m">5000</span>
+
+<span class="c1"># Larger batch size</span>
+uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>train.global_batch_size<span class="o">=</span><span class="m">64</span>
+
+<span class="c1"># Different checkpoint location</span>
+uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>checkpoint.save<span class="o">=</span>/path/to/checkpoints
+</pre></div>
+</div>
+</section>
+</section>
+<section id="running-with-nemo-run">
+<h3>Running with NeMo-Run<a class="headerlink" href="#running-with-nemo-run" title="Link to this heading">#</a></h3>
+<p>Configure execution profiles in <code class="docutils literal notranslate"><span class="pre">env.toml</span></code>:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[wandb]</span>
+<span class="n">project</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;nemotron&quot;</span>
+<span class="n">entity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;YOUR-TEAM&quot;</span>
+
+<span class="k">[YOUR-CLUSTER]</span>
+<span class="n">executor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;slurm&quot;</span>
+<span class="n">account</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;YOUR-ACCOUNT&quot;</span>
+<span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;batch&quot;</span>
+<span class="n">nodes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<span class="n">ntasks_per_node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+<span class="n">gpus_per_node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+<span class="n">mounts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;/lustre:/lustre&quot;</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="../nemo-run.html"><span class="std std-doc">Execution through NeMo-Run</span></a> for complete configuration options.</p>
+</section>
+<section id="checkpoint-resume">
+<h3>Checkpoint &amp; Resume<a class="headerlink" href="#checkpoint-resume" title="Link to this heading">#</a></h3>
+<p>Training automatically saves checkpoints at regular intervals. To resume from a checkpoint:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Resume from a specific checkpoint</span>
+uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>checkpoint.load<span class="o">=</span>/path/to/checkpoint
+
+<span class="c1"># Resume from latest checkpoint in a directory</span>
+uv<span class="w"> </span>run<span class="w"> </span>nemotron<span class="w"> </span>nano3<span class="w"> </span>pretrain<span class="w"> </span>checkpoint.load<span class="o">=</span>/path/to/checkpoints/
+</pre></div>
+</div>
+<p><strong>Checkpoint Configuration:</strong></p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">checkpoint.save</span></code></p></td>
+<td><p>Directory for saving checkpoints</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">checkpoint.load</span></code></p></td>
+<td><p>Path to checkpoint for resuming</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">checkpoint.save_interval</span></code></p></td>
+<td><p>Steps between saves (default: 1000)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Checkpoints use Megatron’s distributed format, which handles model parallelism automatically. Each checkpoint contains model weights, optimizer state, and training progress.</p>
+<blockquote>
+<div><p>For checkpoint format and advanced options, see <a class="reference external" href="https://docs.nvidia.com/nemo/megatron-bridge/latest/training/checkpointing.html">Megatron-Bridge Checkpointing</a>.</p>
 </div></blockquote>
 </section>
-<section id="nvidia-ai-stack">
-<h2>NVIDIA AI Stack<a class="headerlink" href="#nvidia-ai-stack" title="Link to this heading">#</a></h2>
+<section id="artifact-lineage">
+<h3>Artifact Lineage<a class="headerlink" href="#artifact-lineage" title="Link to this heading">#</a></h3>
+<pre  class="mermaid">
+        %%{init: {'theme': 'base', 'themeVariables': { 'primaryBorderColor': '#333333', 'lineColor': '#333333', 'primaryTextColor': '#333333'}}}%%
+flowchart TB
+    raw[&quot;Raw Text Data&quot;] --&gt; dp[&quot;data_prep.py&quot;]
+    dp --&gt; data[&quot;DataBlendsArtifact-pretrain&lt;br/&gt;(bin/idx files + blend.json)&quot;]
+    data --&gt; train[&quot;train.py&quot;]
+    train --&gt; model[&quot;ModelArtifact-pretrain&lt;br/&gt;(checkpoint)&quot;]
+    model --&gt; next[&quot;Stage 1: SFT&quot;]
+
+    style raw fill:#e1f5fe,stroke:#2196f3
+    style dp fill:#e1f5fe,stroke:#2196f3
+    style data fill:#e1f5fe,stroke:#2196f3
+    style train fill:#e1f5fe,stroke:#2196f3
+    style model fill:#e1f5fe,stroke:#2196f3
+    style next fill:#f3e5f5,stroke:#9c27b0
+    </pre></section>
+</section>
+<hr class="docutils" />
+<section id="infrastructure">
+<h2>Infrastructure<a class="headerlink" href="#infrastructure" title="Link to this heading">#</a></h2>
 <p>This stage uses the following components from the <a class="reference internal" href="../nvidia-stack.html"><span class="std std-doc">NVIDIA AI Stack</span></a>:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -1148,42 +1324,58 @@ flowchart TB
 </div>
 <section id="parallelism-configuration">
 <h3>Parallelism Configuration<a class="headerlink" href="#parallelism-configuration" title="Link to this heading">#</a></h3>
-<p>Pretraining uses multiple parallelism strategies for efficient scaling:</p>
+<p>Pretraining uses multiple parallelism strategies for efficient scaling. The specific values differ between main pretraining and long-context extension:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Parallelism</p></th>
+<th class="head"><p>Main Pretraining</p></th>
+<th class="head"><p>Long-Context (LC)</p></th>
 <th class="head"><p>Config Key</p></th>
-<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Tensor (TP)</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">model.tensor_model_parallel_size</span></code></p></td>
-<td><p>Split weight matrices across GPUs</p></td>
 </tr>
 <tr class="row-odd"><td><p>Pipeline (PP)</p></td>
+<td><p>1</p></td>
+<td><p>4</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">model.pipeline_model_parallel_size</span></code></p></td>
-<td><p>Split layers into pipeline stages</p></td>
 </tr>
-<tr class="row-even"><td><p>Data (DP)</p></td>
-<td><p>Automatic</p></td>
-<td><p>Replicate model, distribute batches</p></td>
-</tr>
-<tr class="row-odd"><td><p>Expert (EP)</p></td>
+<tr class="row-even"><td><p>Expert (EP)</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">model.expert_model_parallel_size</span></code></p></td>
-<td><p>Distribute MoE experts across GPUs</p></td>
 </tr>
-<tr class="row-even"><td><p>Context (CP)</p></td>
+<tr class="row-odd"><td><p>Context (CP)</p></td>
+<td><p>1</p></td>
+<td><p>8</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">model.context_parallel_size</span></code></p></td>
-<td><p>Distribute long sequences</p></td>
 </tr>
-<tr class="row-odd"><td><p>Sequence (SP)</p></td>
+<tr class="row-even"><td><p>Sequence (SP)</p></td>
+<td><p>Yes</p></td>
+<td><p>Yes</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">model.sequence_parallel</span></code></p></td>
-<td><p>Distribute LayerNorm/Dropout activations</p></td>
+</tr>
+<tr class="row-odd"><td><p>Data (DP)</p></td>
+<td><p>Auto</p></td>
+<td><p>Auto</p></td>
+<td><p>Computed from world size</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p><strong>Why the difference?</strong></p>
+<ul class="simple">
+<li><p><strong>Main pretraining</strong> uses 4K sequences, so context parallelism (CP=1) isn’t needed</p></li>
+<li><p><strong>Long-context extension</strong> handles up to 1M tokens, requiring CP=8 to distribute sequences across GPUs</p></li>
+<li><p><strong>Pipeline parallelism</strong> increases in LC phase (PP=4) to handle larger activation memory</p></li>
+</ul>
+<blockquote>
+<div><p>For parallelism concepts, see <a class="reference internal" href="../nvidia-stack.html#parallelism-strategies"><span class="std std-ref">NVIDIA AI Stack: Parallelism</span></a>.</p>
+</div></blockquote>
 </section>
 <section id="container">
 <h3>Container<a class="headerlink" href="#container" title="Link to this heading">#</a></h3>
@@ -1192,6 +1384,7 @@ flowchart TB
 </div>
 </section>
 </section>
+<hr class="docutils" />
 <section id="next-steps">
 <h2>Next Steps<a class="headerlink" href="#next-steps" title="Link to this heading">#</a></h2>
 <p>After pretraining completes, proceed to <a class="reference internal" href="sft.html"><span class="std std-doc">Stage 1: SFT</span></a> for instruction tuning.</p>
@@ -1257,32 +1450,37 @@ flowchart TB
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#direct-script-execution">Direct Script Execution</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation">Data Preparation</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cli-command">CLI Command</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#output">Output</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#training">Training</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">CLI Command</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#override-examples">Override Examples</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-with-nemo-run">Running with NeMo-Run</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#artifact-lineage">Artifact Lineage</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#methodology">Methodology</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#training-methodology">Training Methodology</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#model-architecture">Model Architecture</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pretraining-data">Pretraining Data</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-mixture">Data Mixture</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hyperparameters">Hyperparameters</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe-load-balancing">MoE Load Balancing</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#long-context-extension">Long-Context Extension</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#open-source-data">Open-Source Data</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nvidia-ai-stack">NVIDIA AI Stack</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recipe-execution">Recipe Execution</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#direct-script-execution-megatron-bridge">Direct Script Execution (Megatron-Bridge)</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation">Data Preparation</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cli-command">CLI Command</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#output">Output</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#training">Training</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">CLI Command</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#override-examples">Override Examples</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#running-with-nemo-run">Running with NeMo-Run</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint-resume">Checkpoint &amp; Resume</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#artifact-lineage">Artifact Lineage</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#infrastructure">Infrastructure</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parallelism-configuration">Parallelism Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#container">Container</a></li>
 </ul>
