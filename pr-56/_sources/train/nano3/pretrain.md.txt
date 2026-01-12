@@ -46,7 +46,7 @@ flowchart LR
 
 - **Mamba-2 layers** provide linear-time sequence processing, enabling efficient inference on long contexts
 - **Attention layers** are placed at strategic intervals (every ~8 layers) for global information mixing
-- **MoE layers** use 8 experts with top-2 routing, keeping active parameters at ~4B while total parameters reach ~9B
+- **MoE layers** use 128 routed experts plus 1 shared expert, with 6 experts activated per token, keeping active parameters at ~3.5B while total parameters reach ~31.6B
 
 > For architecture rationale, see [Tech Report Section 2.1](https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Nano-Technical-Report.pdf).
 >
@@ -97,8 +97,8 @@ Training follows a two-phase curriculum that transitions from broad coverage to 
 | Parameter | Value |
 |-----------|-------|
 | **Total Tokens** | 25 trillion |
-| **Batch Size** | 8192 sequences |
-| **Sequence Length** | 4096 tokens |
+| **Batch Size** | 3,072 sequences |
+| **Sequence Length** | 8,192 tokens |
 | **Peak Learning Rate** | 1e-3 |
 | **Minimum Learning Rate** | 1e-5 |
 | **Optimizer** | AdamW (β₁=0.9, β₂=0.95) |
@@ -173,20 +173,29 @@ $ uv run nemotron nano3 pretrain --run YOUR-CLUSTER
 
 > **Note**: The `--run YOUR-CLUSTER` flag submits jobs via [NeMo-Run](../nemo-run.md). See [Execution through NeMo-Run](../nemo-run.md) for setup.
 
-#### Direct Script Execution
+#### Direct Script Execution (Megatron-Bridge)
 
-Inside a container on a compute node:
+For direct execution outside this CLI, use the scripts in the [Megatron-Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) repository:
 
 ```bash
-# Data preparation
-uv run python data_prep.py --config config/data_prep.yaml
+# Clone the repository and checkout the nano-v3 branch
+git clone https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
+cd Megatron-Bridge
+git checkout nano-v3
 
-# Training (single node)
-uv run python train.py --config config/default.yaml
+# Run pretraining (inside container on compute node)
+python examples/recipes/nemotron_3/pretrain_nemotron_3_nano.py \
+    --per-split-data-args-path /path/to/data_args.json \
+    --tokenizer-model /path/to/tokenizer.model
 
-# Training (distributed)
-uv run torchrun --nproc_per_node=8 train.py --config config/default.yaml
+# With config file overrides
+python examples/recipes/nemotron_3/pretrain_nemotron_3_nano.py \
+    --config-file /path/to/overrides.yaml \
+    --per-split-data-args-path /path/to/data_args.json \
+    --tokenizer-model /path/to/tokenizer.model
 ```
+
+See the [Megatron-Bridge Nemotron 3 documentation](https://docs.nvidia.com/nemo/megatron-bridge/latest/models/llm/nemotron3.html) for detailed configuration options.
 
 ### Configuration
 
