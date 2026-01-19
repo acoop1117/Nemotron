@@ -180,14 +180,36 @@ class DataPrepConfig:
     ray_data_cpus_per_actor: float = 1.0
     """CPUs per actor for Ray Data executor"""
 
-    ray_data_max_tasks_in_flight: int = 2
-    """Max tasks in flight per actor (pipelining depth)"""
+    ray_data_max_tasks_in_flight: int = 4
+    """Max tasks in flight per actor (pipelining depth for better I/O overlap)"""
+
+    max_concurrent_downloads: int = 64
+    """Maximum parallel HuggingFace file downloads during pre-download phase.
+    Higher values increase throughput but may overwhelm HF servers or network."""
+
+    cleanup_hf_cache: bool = False
+    """Delete HuggingFace cache after processing. Useful for one-off jobs."""
 
     console_mode: Literal["rich", "simple"] = "simple"
     """Console output mode: 'rich' for animated progress bars, 'simple' for periodic text updates"""
 
     simple_log_interval_sec: int = 30
     """Interval in seconds between status updates in simple console mode (default: 30)"""
+
+    execution_engine: Literal["ray", "xenna"] = "ray"
+    """Execution backend for shard processing."""
+
+    wandb_log_downloads: bool = False
+    """Log download progress metrics to W&B (Xenna path only)."""
+
+    wandb_download_log_interval_sec: int = 30
+    """Interval (seconds) for W&B download progress logging."""
+
+    hf_download_timeout_sec: int = 300
+    """Per-file HF download timeout in seconds (Xenna path only)."""
+
+    hf_download_max_retries: int = 3
+    """Max retries for HF downloads before giving up (Xenna path only)."""
 
 
 def run_data_prep(
@@ -240,31 +262,40 @@ def run_data_prep(
     # Resolve output_dir to absolute path for W&B artifact storage
     output_dir = config.output_dir.resolve() if hasattr(config.output_dir, 'resolve') else Path(config.output_dir).resolve()
 
-    # Initialize Ray early so we can query cluster resources
-    import ray
+    # Initialize Ray for download tasks (Xenna and Ray executors both use Ray)
+    if config.execution_engine in ("ray", "xenna"):
+        import ray
 
-    if not ray.is_initialized():
-        runtime_env = {
-            "excludes": [
-                "output/",
-                "outputs/",
-                "wandb/",
-                "data/",
-                "checkpoints/",
-                "*.bin",
-                "*.idx",
-                "*.npy",
-                "__pycache__/",
-                ".git/",
-                ".venv/",
-                "*.egg-info/",
-            ]
-        }
-        ray.init(address="auto", ignore_reinit_error=True, runtime_env=runtime_env)
+        if not ray.is_initialized():
+            runtime_env = {
+                "excludes": [
+                    "output/",
+                    "outputs/",
+                    "wandb/",
+                    "data/",
+                    "checkpoints/",
+                    "*.bin",
+                    "*.idx",
+                    "*.npy",
+                    "__pycache__/",
+                    ".git/",
+                    ".venv/",
+                    "*.egg-info/",
+                ],
+                "env_vars": {},
+            }
+            # Pass HF_HOME to Ray actors for persistent dataset caching on Lustre
+            if os.environ.get("HF_HOME"):
+                runtime_env["env_vars"]["HF_HOME"] = os.environ["HF_HOME"]
+            # Pass HF_TOKEN for private dataset access
+            if os.environ.get("HF_TOKEN"):
+                runtime_env["env_vars"]["HF_TOKEN"] = os.environ["HF_TOKEN"]
+
+            ray.init(address="auto", ignore_reinit_error=True, runtime_env=runtime_env)
 
     # Build Ray Data config if enabled, auto-detecting cluster resources
     ray_data_config = None
-    if config.ray_data_enabled:
+    if config.execution_engine == "ray" and config.ray_data_enabled:
         from nemotron.data_prep.config import RayDataConfig
 
         # Auto-detect available CPUs from Ray cluster
@@ -277,11 +308,36 @@ def run_data_prep(
         # Use the highest available CPU count (Ray may report fewer due to config issues)
         available_cpus = max(int(ray_cpus), slurm_cpus, os_cpus)
 
-        # Use most of available CPUs for actors (leave some headroom)
-        # min_actors = start with good parallelism
-        # max_actors = allow scaling up to use all CPUs
+        # CPU-based limit (use 90% of CPUs)
         cpus_per_actor = config.ray_data_cpus_per_actor
-        auto_max_actors = int(available_cpus * 0.9 / cpus_per_actor)  # Use 90% of CPUs
+        cpu_based_limit = int(available_cpus * 0.9 / cpus_per_actor)
+
+        # Memory-based limit to prevent OOM
+        # Each actor loads a tokenizer (~1GB) + needs working memory (~1GB) = ~2GB total
+        # Ray's object_store_memory is pre-allocated from system RAM
+        # Worker memory = total system RAM - object store - overhead
+        ray_memory = cluster_resources.get("memory", 0)
+        object_store = cluster_resources.get("object_store_memory", 0)
+
+        if ray_memory > 0 and object_store > 0:
+            # Worker memory is roughly: total - object_store - 10% overhead
+            total_memory_gb = ray_memory / (1024**3)
+            object_store_gb = object_store / (1024**3)
+            worker_memory_gb = (total_memory_gb - object_store_gb) * 0.9
+            # Estimate: tokenizer (~1-2GB) + working memory (~1GB) = ~3GB per actor
+            memory_per_actor_gb = 3.0
+            memory_based_limit = max(4, int(worker_memory_gb / memory_per_actor_gb))
+        else:
+            # Fallback: use conservative 50% of CPUs when memory info unavailable
+            memory_based_limit = int(available_cpus * 0.5 / cpus_per_actor)
+            total_memory_gb = 0
+            object_store_gb = 0
+            worker_memory_gb = 0
+
+        # Use the more restrictive limit to prevent OOM
+        auto_max_actors = min(cpu_based_limit, memory_based_limit)
+
+        # Apply user override if specified
         if config.ray_data_max_actors is not None:
             max_actors = min(config.ray_data_max_actors, auto_max_actors)
         else:
@@ -291,6 +347,9 @@ def run_data_prep(
         # Log resource detection for debugging
         print(f"Ray cluster resources: {cluster_resources}")
         print(f"CPU detection: Ray={ray_cpus}, SLURM={slurm_cpus}, os={os_cpus} -> using {available_cpus}")
+        if ray_memory > 0:
+            print(f"Memory detection: total={total_memory_gb:.1f}GB, object_store={object_store_gb:.1f}GB, worker={worker_memory_gb:.1f}GB")
+        print(f"Actor limits: CPU-based={cpu_based_limit}, Memory-based={memory_based_limit}")
         print(f"Ray Data config: min_actors={min_actors}, max_actors={max_actors}")
 
         # Log W&B status for debugging
@@ -309,6 +368,8 @@ def run_data_prep(
             max_actors=max_actors,
             cpus_per_actor=cpus_per_actor,
             max_tasks_in_flight_per_actor=config.ray_data_max_tasks_in_flight,
+            max_concurrent_downloads=config.max_concurrent_downloads,
+            cleanup_hf_cache=config.cleanup_hf_cache,
         )
 
     pipeline_config = PipelineConfig(
@@ -330,6 +391,12 @@ def run_data_prep(
         ray_data=ray_data_config,
         console_mode=config.console_mode,
         simple_log_interval_sec=config.simple_log_interval_sec,
+        execution_engine=config.execution_engine,
+        max_concurrent_downloads=config.max_concurrent_downloads,
+        wandb_log_downloads=config.wandb_log_downloads,
+        wandb_download_log_interval_sec=config.wandb_download_log_interval_sec,
+        hf_download_timeout_sec=config.hf_download_timeout_sec,
+        hf_download_max_retries=config.hf_download_max_retries,
     )
 
     # Run processing pipeline
@@ -385,6 +452,19 @@ def run_data_prep(
         name=config.artifact_name,  # Semantic name for W&B artifact naming
     )
     artifact.save()
+
+    # Cleanup HuggingFace cache if requested
+    if config.cleanup_hf_cache:
+        hf_home = os.environ.get("HF_HOME")
+        if hf_home and os.path.isdir(hf_home):
+            import shutil
+
+            print(f"Cleaning up HF cache: {hf_home}")
+            try:
+                shutil.rmtree(hf_home)
+                print(f"HF cache deleted: {hf_home}")
+            except Exception as e:
+                print(f"Failed to delete HF cache: {e}")
 
     # Mark wandb run as successful (before Ray shutdown to avoid socket noise)
     finish_wandb(exit_code=0)

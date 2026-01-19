@@ -982,6 +982,13 @@ def run_with_nemo_run(
         except Exception:
             pass
 
+        # Set HF_HOME for persistent dataset caching on Lustre
+        # Priority: env var > remote_job_dir/hf
+        if os.environ.get("HF_HOME"):
+            runtime_env["env_vars"]["HF_HOME"] = os.environ["HF_HOME"]
+        elif run_config.remote_job_dir:
+            runtime_env["env_vars"]["HF_HOME"] = f"{run_config.remote_job_dir}/hf"
+
         # Auto-detect Weights & Biases API key for Ray workers
         try:
             import wandb

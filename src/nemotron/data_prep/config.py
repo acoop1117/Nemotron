@@ -102,6 +102,7 @@ class JsonlOutputConfig:
     num_shards: int | None = None
     transform: Transform | None = None
     compression: Literal["none", "zstd"] = "none"
+    resolve_hf_placeholders: bool = False
 
     def __post_init__(self) -> None:
         if self.shard_size is not None and self.num_shards is not None:
@@ -215,6 +216,12 @@ class RayDataConfig:
             bubbles and keep actors fed. Note: does not by itself parallelize
             a single actor; true I/O latency hiding requires either more actors
             (with fractional num_cpus) or async internal concurrency.
+        max_concurrent_downloads: Maximum parallel HuggingFace file downloads
+            during the pre-download phase. Higher values increase throughput
+            but may overwhelm HF servers or local network. Default: 64.
+        cleanup_hf_cache: If True, delete the HuggingFace cache directory
+            after processing completes. Useful for one-off jobs where cache
+            isn't needed. Default: False.
     """
 
     enabled: bool = False
@@ -222,6 +229,8 @@ class RayDataConfig:
     max_actors: int | None = None  # None = use all available CPUs
     cpus_per_actor: float = 1.0
     max_tasks_in_flight_per_actor: int = 2
+    max_concurrent_downloads: int = 64
+    cleanup_hf_cache: bool = False
 
 
 @dataclass(frozen=True)
@@ -290,6 +299,8 @@ class PipelineConfig:
             uses Ray Data's ActorPoolStrategy for shard processing instead of manual actors.
         console_mode: Console output mode ('rich' or 'simple')
         simple_log_interval_sec: Interval in seconds for simple mode status updates
+        execution_engine: Execution backend ("ray" or "xenna")
+        max_concurrent_downloads: Max parallel HF downloads (used by Xenna path)
     """
 
     output: OutputConfig
@@ -302,6 +313,13 @@ class PipelineConfig:
     ray_data: RayDataConfig | None = None
     console_mode: str = "simple"
     simple_log_interval_sec: int = 30
+    execution_engine: Literal["ray", "xenna"] = "ray"
+    max_concurrent_downloads: int = 64
+    wandb_log_downloads: bool = False
+    wandb_download_log_interval_sec: int = 30
+    hf_download_timeout_sec: int = 300
+    hf_download_max_retries: int = 3
+    num_actors: int | None = None
 
 
 # ============================================================================

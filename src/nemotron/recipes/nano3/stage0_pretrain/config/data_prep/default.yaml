@@ -47,8 +47,9 @@ max_doc_tokens: null
 # Limit rows per dataset for quick tests (null = no limit)
 sample: null
 
-# Ray Data executor settings (limit actors to avoid OOM on high-CPU nodes)
-ray_data_max_actors: 32
+# Ray Data executor settings
+# Set to 48 as balance between parallelism and memory on 172GB nodes
+ray_data_max_actors: 48
 
 # Console output mode: 'simple' for periodic text updates, 'rich' for animated progress
 console_mode: simple
