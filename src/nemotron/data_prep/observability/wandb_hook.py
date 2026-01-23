@@ -1,0 +1,973 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Real-time W&B logging for pipelines via monkey-patching.
+
+This module provides a context manager that patches PipelineMonitor._make_stats
+to intercept PipelineStats objects and log metrics to W&B in real-time.
+
+Usage:
+    from nemotron.data_prep.observability import make_wandb_stats_hook
+
+    hook = make_wandb_stats_hook(
+        observability=observability_cfg,
+        pipeline_kind="pretrain",
+    )
+
+    if hook:
+        with hook:
+            pipelines_v1.run_pipeline(pipeline_spec)
+    else:
+        pipelines_v1.run_pipeline(pipeline_spec)
+
+Why monkey-patching?
+    - PipelineMonitor.update() builds PipelineStats via _make_stats()
+    - By patching _make_stats, we intercept stats at the same frequency as pipeline logging
+    - No changes to cosmos-xenna required
+    - Works with both streaming and batch pipelines
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import threading
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+from nemotron.data_prep.config import DatasetConfig, ObservabilityConfig
+from nemotron.data_prep.observability.stage_keys import canonical_stage_id, get_stage_display_name
+from nemotron.data_prep.utils.discovery import get_dataset_metadata
+from nemotron.data_prep.utils.size import format_byte_size
+
+if TYPE_CHECKING:
+    pass
+
+logger = logging.getLogger(__name__)
+
+# Stage-level metrics that should be consolidated into multi-line charts
+# Each metric will become one chart with a line per stage
+STAGE_METRICS = [
+    "tasks_completed",
+    "queue_in",
+    "queue_out",
+    "slots_used",
+    "slots_empty",
+    "actors_target",
+    "actors_pending",
+    "actors_ready",
+    "actors_running",
+    "actors_idle",
+    "speed_tasks_per_s",
+    "resource_cpu_util_pct",
+    "resource_mem_gb",
+    "resource_actor_count",
+]
+
+# Module-level state for safe patching
+_patch_lock = threading.RLock()
+_patch_depth = 0
+_original_make_stats: Callable | None = None
+_active_hooks: list["WandbStatsHook"] = []
+
+
+def _get_dataset_size_str(item: Any) -> str:
+    """Get human-readable dataset size for plan table.
+
+    For HuggingFace datasets (hf://...), fetches size from HF API.
+    For other sources, returns "-" (size will be shown in progress table
+    once the plan is created).
+
+    Args:
+        item: DatasetWorkItem or SftDatasetWorkItem
+
+    Returns:
+        Human-readable size string (e.g., "1.5 GB") or "-" if unavailable.
+    """
+    path = getattr(item, "path", "") or ""
+    if not path.startswith("hf://"):
+        return "-"
+
+    try:
+        cfg = DatasetConfig(
+            name=getattr(item, "dataset_name", "unknown"),
+            path=path,
+            weight=getattr(item, "weight", 0.0),
+            text_field="text",
+            split=getattr(item, "split", None),
+            subset=getattr(item, "subset", None),
+        )
+        md = get_dataset_metadata(cfg)
+        if md.size_str:
+            return md.size_str
+        if md.size_bytes is not None:
+            return format_byte_size(int(md.size_bytes))
+    except Exception:
+        return "-"
+
+    return "-"
+
+
+def _sanitize_stage_key(name: str) -> str:
+    """Convert stage name to valid metric key.
+
+    Deprecated: Use canonical_stage_id() from stage_keys module instead.
+    Kept for backward compatibility.
+
+    Examples:
+        "PlanStage" -> "plan"
+        "Stage 00 - PlanStage" -> "plan"
+        "BinIdxTokenizationStage" -> "bin_idx_tokenization"
+    """
+    return canonical_stage_id(name)
+
+
+def _extract_stage_metrics(stats: Any) -> dict[str, dict[str, float | int]]:
+    """Extract per-stage metrics organized by metric name.
+
+    Returns a dict where keys are metric names (e.g., "tasks_completed")
+    and values are dicts mapping stage_id -> value.
+
+    Example return value:
+        {
+            "tasks_completed": {"plan": 100, "download": 50, "bin_idx_tokenization": 25},
+            "queue_in": {"plan": 0, "download": 10, "bin_idx_tokenization": 5},
+            ...
+        }
+    """
+    metrics_by_name: dict[str, dict[str, float | int]] = {}
+
+    # Per-stage metrics from actor_pools
+    if hasattr(stats, "actor_pools") and stats.actor_pools is not None:
+        for pool in stats.actor_pools:
+            stage_id = canonical_stage_id(pool.name)
+
+            # Actor stats
+            if hasattr(pool, "actor_stats") and pool.actor_stats is not None:
+                a = pool.actor_stats
+                if hasattr(a, "target"):
+                    metrics_by_name.setdefault("actors_target", {})[stage_id] = a.target
+                if hasattr(a, "pending"):
+                    metrics_by_name.setdefault("actors_pending", {})[stage_id] = a.pending
+                if hasattr(a, "ready"):
+                    metrics_by_name.setdefault("actors_ready", {})[stage_id] = a.ready
+                if hasattr(a, "running"):
+                    metrics_by_name.setdefault("actors_running", {})[stage_id] = a.running
+                if hasattr(a, "idle"):
+                    metrics_by_name.setdefault("actors_idle", {})[stage_id] = a.idle
+
+            # Task stats
+            if hasattr(pool, "task_stats") and pool.task_stats is not None:
+                t = pool.task_stats
+                if hasattr(t, "total_completed"):
+                    metrics_by_name.setdefault("tasks_completed", {})[stage_id] = t.total_completed
+                if hasattr(t, "input_queue_size"):
+                    metrics_by_name.setdefault("queue_in", {})[stage_id] = t.input_queue_size
+                if hasattr(t, "output_queue_size"):
+                    metrics_by_name.setdefault("queue_out", {})[stage_id] = t.output_queue_size
+
+            # Slot stats
+            if hasattr(pool, "slot_stats") and pool.slot_stats is not None:
+                s = pool.slot_stats
+                if hasattr(s, "num_used"):
+                    metrics_by_name.setdefault("slots_used", {})[stage_id] = s.num_used
+                if hasattr(s, "num_empty"):
+                    metrics_by_name.setdefault("slots_empty", {})[stage_id] = s.num_empty
+
+            # Processing speed
+            if hasattr(pool, "processing_speed_tasks_per_second"):
+                speed = pool.processing_speed_tasks_per_second
+                if speed is not None:
+                    metrics_by_name.setdefault("speed_tasks_per_s", {})[stage_id] = speed
+
+    # Per-stage resource usage
+    if hasattr(stats, "resource_usage_per_stage") and stats.resource_usage_per_stage:
+        for stage_name, usage in stats.resource_usage_per_stage.items():
+            stage_id = canonical_stage_id(stage_name)
+
+            if hasattr(usage, "cpu_utilization"):
+                metrics_by_name.setdefault("resource_cpu_util_pct", {})[stage_id] = usage.cpu_utilization
+            if hasattr(usage, "memory_usage"):
+                metrics_by_name.setdefault("resource_mem_gb", {})[stage_id] = usage.memory_usage / 1e9
+            if hasattr(usage, "actor_count"):
+                metrics_by_name.setdefault("resource_actor_count", {})[stage_id] = usage.actor_count
+
+    return metrics_by_name
+
+
+def _flatten_pipeline_stats(stats: Any, *, namespace: str = "") -> dict[str, float | int]:
+    """Flatten PipelineStats into a dict suitable for JSONL logging.
+
+    Args:
+        stats: A PipelineStats object from cosmos-xenna
+        namespace: Prefix for all metric keys (default: empty for JSONL)
+
+    Returns:
+        Dict mapping metric names to numeric values
+    """
+    metrics: dict[str, float | int] = {}
+    ns = namespace
+
+    # Pipeline-level metrics
+    if hasattr(stats, "pipeline_duration_s"):
+        metrics[f"{ns}/pipeline_duration_s"] = stats.pipeline_duration_s
+    if hasattr(stats, "main_loop_rate_hz"):
+        metrics[f"{ns}/main_loop_rate_hz"] = stats.main_loop_rate_hz
+    if hasattr(stats, "num_input_tasks_remaining"):
+        metrics[f"{ns}/num_input_remaining"] = stats.num_input_tasks_remaining
+    if hasattr(stats, "num_initial_input_tasks"):
+        metrics[f"{ns}/num_initial_inputs"] = stats.num_initial_input_tasks
+    if hasattr(stats, "num_outputs"):
+        metrics[f"{ns}/num_outputs"] = stats.num_outputs
+
+    # Computed rates (properties on PipelineStats)
+    if hasattr(stats, "inputs_processed_per_second"):
+        metrics[f"{ns}/inputs_processed_per_s"] = stats.inputs_processed_per_second
+    if hasattr(stats, "outputs_per_second"):
+        metrics[f"{ns}/outputs_per_s"] = stats.outputs_per_second
+
+    # Progress (percentage of inputs processed)
+    if hasattr(stats, "num_initial_input_tasks") and hasattr(stats, "num_input_tasks_remaining"):
+        initial = stats.num_initial_input_tasks
+        remaining = stats.num_input_tasks_remaining
+        if initial > 0:
+            metrics[f"{ns}/progress"] = (initial - remaining) / initial * 100.0
+
+    # Cluster resources
+    if hasattr(stats, "cluster") and stats.cluster is not None:
+        cluster = stats.cluster
+
+        if hasattr(cluster, "total") and cluster.total is not None:
+            total = cluster.total
+            if hasattr(total, "num_cpus"):
+                metrics[f"{ns}/cluster/total_cpus"] = total.num_cpus
+            if hasattr(total, "num_gpus"):
+                metrics[f"{ns}/cluster/total_gpus"] = total.num_gpus
+            if hasattr(total, "memory"):
+                metrics[f"{ns}/cluster/total_mem_gb"] = total.memory / 1e9
+            if hasattr(total, "object_store_memory"):
+                metrics[f"{ns}/cluster/total_obj_store_gb"] = total.object_store_memory / 1e9
+
+        if hasattr(cluster, "available") and cluster.available is not None:
+            avail = cluster.available
+            if hasattr(avail, "num_cpus"):
+                metrics[f"{ns}/cluster/avail_cpus"] = avail.num_cpus
+            if hasattr(avail, "num_gpus"):
+                metrics[f"{ns}/cluster/avail_gpus"] = avail.num_gpus
+            if hasattr(avail, "memory"):
+                metrics[f"{ns}/cluster/avail_mem_gb"] = avail.memory / 1e9
+            if hasattr(avail, "object_store_memory"):
+                metrics[f"{ns}/cluster/avail_obj_store_gb"] = avail.object_store_memory / 1e9
+
+    # Per-stage metrics using consolidated format: stages/<metric>/<stage>
+    # This produces fewer W&B charts (one per metric) with lines for each stage
+    stage_metrics = _extract_stage_metrics(stats)
+    for metric_name, stage_values in stage_metrics.items():
+        for stage_id, value in stage_values.items():
+            metrics[f"{ns}/stages/{metric_name}/{stage_id}"] = value
+
+    return metrics
+
+
+def _make_jsonl_record(stats: Any, *, pipeline_kind: str, run_hash: str | None) -> dict[str, Any]:
+    """Create a JSONL record from PipelineStats.
+
+    Args:
+        stats: A PipelineStats object
+        pipeline_kind: Type of pipeline (e.g., "pretrain", "sft")
+        run_hash: Unique run identifier
+
+    Returns:
+        Dict suitable for writing as a JSONL line
+    """
+    record: dict[str, Any] = {
+        "timestamp": time.time(),
+        "pipeline_kind": pipeline_kind,
+        "run_hash": run_hash,
+    }
+
+    # Add flattened metrics
+    metrics = _flatten_pipeline_stats(stats, namespace="")
+    record["metrics"] = metrics
+
+    # Add stage names for reference
+    if hasattr(stats, "actor_pools") and stats.actor_pools:
+        record["stages"] = [pool.name for pool in stats.actor_pools]
+
+    return record
+
+
+class WandbStatsHook:
+    """Context manager that patches PipelineMonitor._make_stats for W&B logging.
+
+    This hook intercepts PipelineStats objects and logs them to W&B in real-time.
+    It's safe to use in nested contexts (reference counted) and is thread-safe.
+
+    Args:
+        observability: Configuration for what to log
+        pipeline_kind: Type of pipeline (e.g., "pretrain", "sft")
+        run_hash: Unique run identifier for JSONL records
+        run_dir: Directory for JSONL output file
+        dataset_names: Names of datasets being processed
+        dataset_num_shards: Dict mapping dataset name to expected number of shards
+        wandb_namespace: Prefix for W&B metric keys (default: pipeline_kind, e.g. "pretrain")
+        monitor_cls: PipelineMonitor class to patch (for testing)
+
+    Example:
+        hook = WandbStatsHook(
+            observability=observability_cfg,
+            pipeline_kind="pretrain",
+        )
+        with hook:
+            pipelines_v1.run_pipeline(pipeline_spec)
+    """
+
+    def __init__(
+        self,
+        *,
+        observability: ObservabilityConfig,
+        pipeline_kind: str,
+        run_hash: str | None = None,
+        run_dir: str | None = None,
+        dataset_names: list[str] | None = None,
+        dataset_num_shards: dict[str, int] | None = None,
+        wandb_namespace: str | None = None,
+        monitor_cls: type | None = None,
+    ) -> None:
+        self._observability = observability
+        self._pipeline_kind = pipeline_kind
+        self._run_hash = run_hash
+        self._run_dir = run_dir
+        self._dataset_names = dataset_names or []
+        self._dataset_num_shards = dataset_num_shards or {}
+        # Use pipeline_kind as namespace by default (e.g., "pretrain", "sft")
+        self._wandb_namespace = wandb_namespace if wandb_namespace is not None else pipeline_kind
+        self._monitor_cls = monitor_cls
+
+        # JSONL file handle (lazy opened)
+        self._jsonl_file: Any = None
+        self._jsonl_path: Path | None = None
+        if observability.pipeline_stats_jsonl_path:
+            self._jsonl_path = Path(observability.pipeline_stats_jsonl_path)
+
+        # Track if we logged anything
+        self._log_count = 0
+
+        # Progress table tracking
+        self._last_progress_table_time: float = 0.0
+        self._fs: Any = None  # Lazy-loaded filesystem
+        self._dataset_input_bytes: dict[str, int] = {}  # Cache for dataset sizes from plan.json
+
+        # Consolidated chart state for line_series
+        # Ordered list of stage IDs discovered from first stats
+        self._stage_ids: list[str] | None = None
+        # Step counter for time series
+        self._step: int = 0
+        # History for building line_series charts: metric -> stage -> [values]
+        self._metric_history: dict[str, dict[str, list[float]]] = {}
+        self._step_history: list[int] = []
+        # How often to update consolidated charts (every N steps)
+        self._chart_update_interval: int = 5
+
+    def _get_monitor_class(self) -> type:
+        """Get the PipelineMonitor class to patch."""
+        if self._monitor_cls is not None:
+            return self._monitor_cls
+
+        # Lazy import to avoid coupling at import time
+        from cosmos_xenna.pipelines.private.monitoring import PipelineMonitor
+
+        return PipelineMonitor
+
+    def _create_wrapper(self, original: Callable) -> Callable:
+        """Create a wrapper function that logs stats after calling original."""
+        hook = self  # Capture self for the wrapper
+
+        def wrapper(monitor_self: Any, input_len: int, ext_output_lens: list[int], task_metadata_per_pool: list) -> Any:
+            # Call original _make_stats
+            stats = original(monitor_self, input_len, ext_output_lens, task_metadata_per_pool)
+
+            # Log to all active hooks
+            for active_hook in _active_hooks:
+                try:
+                    active_hook._on_stats(stats)
+                except Exception as e:
+                    logger.warning(f"Error in W&B stats hook: {e}")
+
+            return stats
+
+        return wrapper
+
+    def _on_stats(self, stats: Any) -> None:
+        """Called when new PipelineStats are available."""
+        self._log_count += 1
+
+        # Log to W&B
+        if self._observability.wandb_log_pipeline_stats:
+            try:
+                import wandb
+
+                if wandb.run is not None:
+                    self._log_consolidated_charts(stats, wandb)
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.debug(f"W&B logging error: {e}")
+
+        # Log to JSONL
+        if self._jsonl_path is not None:
+            try:
+                if self._jsonl_file is None:
+                    self._jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                    self._jsonl_file = open(self._jsonl_path, "a")
+
+                record = _make_jsonl_record(
+                    stats,
+                    pipeline_kind=self._pipeline_kind,
+                    run_hash=self._run_hash,
+                )
+                self._jsonl_file.write(json.dumps(record) + "\n")
+                self._jsonl_file.flush()
+            except Exception as e:
+                logger.debug(f"JSONL logging error: {e}")
+
+        # Update progress table periodically
+        if self._observability.wandb_log_progress_table and self._run_dir:
+            now = time.time()
+            interval = self._observability.wandb_progress_table_interval_s
+            if now - self._last_progress_table_time >= interval:
+                self._update_progress_table()
+                self._last_progress_table_time = now
+
+    def _log_consolidated_charts(self, stats: Any, wandb: Any) -> None:
+        """Log metrics with consolidated multi-line charts.
+
+        This method:
+        1. Logs pipeline-level scalar metrics (one chart per metric)
+        2. Accumulates history for each metric/stage combination
+        3. Creates line_series charts showing all stages on one chart per metric
+           (This avoids creating separate charts per stage)
+
+        IMPORTANT: We do NOT log individual per-stage scalar metrics because:
+        - Each unique metric key creates a separate chart in WandB
+        - logging stages/{metric}/{stage_id} creates N charts (one per stage)
+        - Instead, we use line_series to get ONE chart with N colored lines
+
+        This gives us the "system metrics" look where each stage appears as a
+        colored line in the legend on a single chart.
+        """
+        ns = self._wandb_namespace
+
+        # Extract stage metrics organized by metric name
+        stage_metrics = _extract_stage_metrics(stats)
+
+        # Discover stage IDs on first call (preserves order for consistent legend)
+        if self._stage_ids is None and hasattr(stats, "actor_pools") and stats.actor_pools:
+            self._stage_ids = [canonical_stage_id(pool.name) for pool in stats.actor_pools]
+
+        # Build all scalar metrics to log
+        # NOTE: Only pipeline-level metrics here, NOT per-stage metrics
+        all_metrics: dict[str, Any] = {}
+
+        # Pipeline-level metrics (these are scalars, one value total)
+        if hasattr(stats, "pipeline_duration_s"):
+            all_metrics[f"{ns}/pipeline_duration_s"] = stats.pipeline_duration_s
+        if hasattr(stats, "main_loop_rate_hz"):
+            all_metrics[f"{ns}/main_loop_rate_hz"] = stats.main_loop_rate_hz
+        if hasattr(stats, "num_input_tasks_remaining"):
+            all_metrics[f"{ns}/num_input_remaining"] = stats.num_input_tasks_remaining
+        if hasattr(stats, "num_initial_input_tasks"):
+            all_metrics[f"{ns}/num_initial_inputs"] = stats.num_initial_input_tasks
+        if hasattr(stats, "num_outputs"):
+            all_metrics[f"{ns}/num_outputs"] = stats.num_outputs
+
+        # Computed rates
+        if hasattr(stats, "inputs_processed_per_second"):
+            all_metrics[f"{ns}/inputs_processed_per_s"] = stats.inputs_processed_per_second
+        if hasattr(stats, "outputs_per_second"):
+            all_metrics[f"{ns}/outputs_per_s"] = stats.outputs_per_second
+
+        # Progress
+        if hasattr(stats, "num_initial_input_tasks") and hasattr(stats, "num_input_tasks_remaining"):
+            initial = stats.num_initial_input_tasks
+            remaining = stats.num_input_tasks_remaining
+            if initial > 0:
+                all_metrics[f"{ns}/progress"] = (initial - remaining) / initial * 100.0
+
+        # Cluster resources (single values, not per-stage)
+        if hasattr(stats, "cluster") and stats.cluster is not None:
+            cluster = stats.cluster
+            if hasattr(cluster, "total") and cluster.total is not None:
+                total = cluster.total
+                if hasattr(total, "num_cpus"):
+                    all_metrics[f"{ns}/cluster/total_cpus"] = total.num_cpus
+                if hasattr(total, "num_gpus"):
+                    all_metrics[f"{ns}/cluster/total_gpus"] = total.num_gpus
+                if hasattr(total, "memory"):
+                    all_metrics[f"{ns}/cluster/total_mem_gb"] = total.memory / 1e9
+                if hasattr(total, "object_store_memory"):
+                    all_metrics[f"{ns}/cluster/total_obj_store_gb"] = total.object_store_memory / 1e9
+
+            if hasattr(cluster, "available") and cluster.available is not None:
+                avail = cluster.available
+                if hasattr(avail, "num_cpus"):
+                    all_metrics[f"{ns}/cluster/avail_cpus"] = avail.num_cpus
+                if hasattr(avail, "num_gpus"):
+                    all_metrics[f"{ns}/cluster/avail_gpus"] = avail.num_gpus
+                if hasattr(avail, "memory"):
+                    all_metrics[f"{ns}/cluster/avail_mem_gb"] = avail.memory / 1e9
+                if hasattr(avail, "object_store_memory"):
+                    all_metrics[f"{ns}/cluster/avail_obj_store_gb"] = avail.object_store_memory / 1e9
+
+        # Accumulate history for line_series charts
+        self._step_history.append(self._step)
+        for metric_name, stage_values in stage_metrics.items():
+            if metric_name not in self._metric_history:
+                self._metric_history[metric_name] = {}
+            for stage_id, value in stage_values.items():
+                if stage_id not in self._metric_history[metric_name]:
+                    self._metric_history[metric_name][stage_id] = []
+                self._metric_history[metric_name][stage_id].append(float(value))
+
+        # Create consolidated line_series charts EVERY step
+        # Each chart shows all stages on one chart per metric
+        # This produces one chart per metric (e.g., "tasks_completed") with
+        # colored lines for each stage (Plan, Download, Tokenize)
+        self._create_line_series_charts(wandb, all_metrics, ns)
+
+        # Increment step
+        self._step += 1
+
+        # Log all metrics in one call
+        wandb.log(all_metrics, commit=True)
+
+    def _create_line_series_charts(self, wandb: Any, all_metrics: dict, ns: str) -> None:
+        """Create wandb.plot.line_series charts for consolidated stage metrics.
+
+        Each chart shows one metric with multiple lines (one per stage).
+        """
+        stage_ids = self._stage_ids or []
+        if not stage_ids or not self._metric_history:
+            return
+
+        # Create a chart for each metric
+        for metric_name, stage_data in self._metric_history.items():
+            # Get display names for stages
+            stages_with_data = [s for s in stage_ids if s in stage_data]
+            if not stages_with_data:
+                continue
+
+            # Build xs and ys for line_series
+            # xs: list of x-values for each line (same step values for all)
+            # ys: list of y-values for each line
+            xs = []
+            ys = []
+            keys = []
+
+            for stage_id in stages_with_data:
+                values = stage_data[stage_id]
+                # Ensure we have matching lengths
+                steps = self._step_history[: len(values)]
+                if steps and values:
+                    xs.append(steps)
+                    ys.append(values)
+                    keys.append(get_stage_display_name(stage_id))
+
+            if xs and ys:
+                try:
+                    # Create human-readable title
+                    title = f"{self._pipeline_kind}: {metric_name.replace('_', ' ').title()}"
+                    chart = wandb.plot.line_series(
+                        xs=xs,
+                        ys=ys,
+                        keys=keys,
+                        title=title,
+                        xname="Step",
+                    )
+                    all_metrics[f"{ns}/charts/{metric_name}"] = chart
+                except Exception as e:
+                    logger.debug(f"Failed to create line_series chart for {metric_name}: {e}")
+
+    def _get_filesystem(self) -> Any:
+        """Get filesystem handle (lazy-loaded)."""
+        if self._fs is None:
+            from nemotron.data_prep.utils.filesystem import get_filesystem
+
+            self._fs, _ = get_filesystem(self._run_dir)
+        return self._fs
+
+    def _update_progress_table(self) -> None:
+        """Scan receipts and log per-dataset progress table to W&B.
+
+        The table shows:
+        - dataset_name: Name of the dataset
+        - size: Input data size from plan.json (e.g., "1.5GB")
+        - total_shards: Expected number of shards for the dataset
+        - downloaded: "X (Y%)" - shards downloaded and started processing
+        - processed: "X (Y%)" - shards fully processed
+        - total_tokens: Cumulative tokens from completed shards
+        - total_sequences: Cumulative sequences from completed shards
+        - status: Overall dataset status (pending/in_progress/completed)
+        """
+        if not self._dataset_names or not self._run_dir:
+            return
+
+        try:
+            import wandb
+
+            if wandb.run is None:
+                return
+
+            fs = self._get_filesystem()
+
+            # Build progress data for each dataset
+            columns = [
+                "dataset_name",
+                "size",
+                "total_shards",
+                "downloaded",
+                "processed",
+                "total_tokens",
+                "total_sequences",
+                "status",
+            ]
+            data = []
+
+            for dataset_name in self._dataset_names:
+                # Find plan_hash by scanning dataset directory
+                dataset_base = f"{self._run_dir}/datasets/{dataset_name}"
+                plan_hash = None
+                total_shards = self._dataset_num_shards.get(dataset_name, 0)
+
+                try:
+                    if fs.exists(dataset_base):
+                        subdirs = [p for p in fs.ls(dataset_base) if fs.isdir(p)]
+                        for subdir in subdirs:
+                            plan_path = f"{subdir}/plan.json"
+                            if fs.exists(plan_path):
+                                plan_hash = subdir.split("/")[-1]
+                                break
+                except Exception:
+                    pass
+
+                # Get dataset size from plan.json (cached)
+                dataset_size_str = "-"
+                if plan_hash:
+                    dataset_bytes = self._dataset_input_bytes.get(dataset_name)
+                    if dataset_bytes is None:
+                        plan_path = f"{dataset_base}/{plan_hash}/plan.json"
+                        try:
+                            from nemotron.data_prep.utils.filesystem import read_json
+
+                            plan = read_json(fs, plan_path)
+                            file_assignments = plan.get("file_assignments") or []
+                            dataset_bytes = sum(
+                                int(fa.get("total_bytes") or 0) for fa in file_assignments
+                            )
+                            self._dataset_input_bytes[dataset_name] = dataset_bytes
+                        except Exception:
+                            dataset_bytes = None
+
+                    if dataset_bytes is not None and dataset_bytes > 0:
+                        dataset_size_str = format_byte_size(dataset_bytes)
+
+                # Count receipts by status
+                # "downloaded" = any receipt exists (started, completed, or failed)
+                # "processed" = completed receipts only
+                shards_downloaded = 0
+                shards_processed = 0
+                total_tokens = 0
+                total_sequences = 0
+
+                if plan_hash:
+                    receipts_dir = f"{dataset_base}/{plan_hash}/receipts"
+                    try:
+                        receipt_files = fs.glob(f"{receipts_dir}/shard_*.json")
+                        for receipt_path in receipt_files:
+                            try:
+                                from nemotron.data_prep.utils.filesystem import read_json
+
+                                receipt = read_json(fs, receipt_path)
+                                status = receipt.get("status")
+
+                                # Any receipt means the shard was downloaded and processing started
+                                if status in ("started", "completed", "failed"):
+                                    shards_downloaded += 1
+
+                                # Only count completed for processed stats
+                                if status == "completed":
+                                    shards_processed += 1
+                                    stats = receipt.get("stats", {}) or {}
+                                    total_tokens += int(stats.get("total_tokens", 0) or 0)
+                                    total_sequences += int(stats.get("num_sequences", 0) or 0)
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
+                # Calculate percentages
+                if total_shards > 0:
+                    downloaded_pct = round(shards_downloaded / total_shards * 100, 1)
+                    processed_pct = round(shards_processed / total_shards * 100, 1)
+                else:
+                    downloaded_pct = 0.0
+                    processed_pct = 0.0
+
+                # Format as "X shards (Y%)"
+                downloaded_str = f"{shards_downloaded} shards ({downloaded_pct}%)"
+                processed_str = f"{shards_processed} shards ({processed_pct}%)"
+
+                # Determine status
+                if shards_processed == 0 and shards_downloaded == 0:
+                    status = "pending"
+                elif total_shards > 0 and shards_processed >= total_shards:
+                    status = "completed"
+                else:
+                    status = "in_progress"
+
+                data.append([
+                    dataset_name,
+                    dataset_size_str,
+                    total_shards,
+                    downloaded_str,
+                    processed_str,
+                    total_tokens,
+                    total_sequences,
+                    status,
+                ])
+
+            # Log table to W&B
+            table = wandb.Table(columns=columns, data=data)
+            wandb.log({f"{self._pipeline_kind}/progress_table": table}, commit=False)
+            logger.debug(f"Updated progress table with {len(data)} datasets")
+
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"Progress table update error: {e}")
+
+    def __enter__(self) -> "WandbStatsHook":
+        """Install the monkey-patch."""
+        global _patch_depth, _original_make_stats, _active_hooks
+
+        with _patch_lock:
+            _active_hooks.append(self)
+
+            if _patch_depth == 0:
+                # First hook - install the patch
+                monitor_cls = self._get_monitor_class()
+                _original_make_stats = monitor_cls._make_stats
+                monitor_cls._make_stats = self._create_wrapper(_original_make_stats)
+                logger.debug("Installed PipelineMonitor._make_stats patch")
+
+            _patch_depth += 1
+
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Remove the monkey-patch."""
+        global _patch_depth, _original_make_stats, _active_hooks
+
+        with _patch_lock:
+            _active_hooks.remove(self)
+            _patch_depth -= 1
+
+            if _patch_depth == 0 and _original_make_stats is not None:
+                # Last hook - restore original
+                monitor_cls = self._get_monitor_class()
+                monitor_cls._make_stats = _original_make_stats
+                _original_make_stats = None
+                logger.debug("Restored PipelineMonitor._make_stats")
+
+        # Close JSONL file
+        if self._jsonl_file is not None:
+            try:
+                self._jsonl_file.close()
+            except Exception:
+                pass
+            self._jsonl_file = None
+
+        logger.debug(f"W&B hook logged {self._log_count} stats updates")
+
+
+def make_wandb_stats_hook(
+    *,
+    observability: ObservabilityConfig,
+    pipeline_kind: str,
+    run_hash: str | None = None,
+    run_dir: str | None = None,
+    dataset_names: list[str] | None = None,
+    dataset_num_shards: dict[str, int] | None = None,
+) -> WandbStatsHook | None:
+    """Factory function to create a W&B stats hook if logging is enabled.
+
+    Args:
+        observability: Configuration for what to log
+        pipeline_kind: Type of pipeline (e.g., "pretrain", "sft")
+        run_hash: Unique run identifier
+        run_dir: Directory for JSONL output
+        dataset_names: Names of datasets being processed
+        dataset_num_shards: Dict mapping dataset name to expected number of shards
+
+    Returns:
+        WandbStatsHook if logging is enabled, None otherwise
+    """
+    # Check if any logging is enabled
+    any_logging = (
+        observability.wandb_log_pipeline_stats
+        or observability.wandb_log_progress_table
+        or observability.pipeline_stats_jsonl_path
+    )
+    if not any_logging:
+        return None
+
+    return WandbStatsHook(
+        observability=observability,
+        pipeline_kind=pipeline_kind,
+        run_hash=run_hash,
+        run_dir=run_dir,
+        dataset_names=dataset_names,
+        dataset_num_shards=dataset_num_shards,
+    )
+
+
+def log_plan_table_to_wandb(
+    *,
+    observability: ObservabilityConfig,
+    pipeline_kind: str,
+    dataset_items: list[Any],
+    run_hash: str | None = None,
+) -> None:
+    """Log a plan table to W&B showing datasets and their processing configuration.
+
+    This logs a wandb.Table before the pipeline runs, showing what datasets
+    will be processed and their configuration.
+
+    Args:
+        observability: Configuration for what to log
+        pipeline_kind: Type of pipeline (e.g., "pretrain", "sft")
+        dataset_items: List of DatasetWorkItem or SftDatasetWorkItem objects
+        run_hash: Unique run identifier
+
+    Example table columns for pretrain:
+        | dataset_name | path | weight | split | num_shards | sample | status |
+
+    Example table columns for SFT:
+        | dataset_name | path | weight | split | num_shards | pack_size | sample | status |
+    """
+    if not observability.wandb_log_plan_table:
+        return
+
+    if not dataset_items:
+        logger.debug("No dataset items to log to plan table")
+        return
+
+    try:
+        import wandb
+
+        if wandb.run is None:
+            logger.debug("W&B run not active, skipping plan table logging")
+            return
+
+        # Build table based on pipeline kind
+        if pipeline_kind == "pretrain":
+            columns = [
+                "dataset_name",
+                "path",
+                "size",
+                "weight",
+                "split",
+                "subset",
+                "num_shards",
+                "dtype",
+                "min_doc_chars",
+                "max_doc_tokens",
+                "max_rows",
+                "sample",
+                "status",
+            ]
+            data = []
+            for item in dataset_items:
+                data.append([
+                    item.dataset_name,
+                    item.path,
+                    _get_dataset_size_str(item),
+                    item.weight,
+                    item.split or "-",
+                    item.subset or "-",
+                    item.num_shards,
+                    item.dtype,
+                    item.min_doc_chars if item.min_doc_chars is not None else "-",
+                    item.max_doc_tokens if item.max_doc_tokens is not None else "-",
+                    item.max_rows if item.max_rows is not None else "-",
+                    str(item.sample) if item.sample is not None else "-",
+                    "pending",
+                ])
+
+        elif pipeline_kind == "sft":
+            columns = [
+                "dataset_name",
+                "path",
+                "size",
+                "weight",
+                "split",
+                "subset",
+                "num_shards",
+                "pack_size",
+                "algorithm",
+                "max_doc_tokens",
+                "max_rows",
+                "sample",
+                "status",
+            ]
+            data = []
+            for item in dataset_items:
+                data.append([
+                    item.dataset_name,
+                    item.path,
+                    _get_dataset_size_str(item),
+                    item.weight,
+                    item.split or "-",
+                    item.subset or "-",
+                    item.num_shards,
+                    getattr(item, "pack_size", "-"),
+                    getattr(item, "algorithm", "-"),
+                    item.max_doc_tokens if item.max_doc_tokens is not None else "-",
+                    item.max_rows if item.max_rows is not None else "-",
+                    str(item.sample) if item.sample is not None else "-",
+                    "pending",
+                ])
+
+        else:
+            # Generic fallback for other pipeline types
+            columns = ["dataset_name", "path", "weight", "status"]
+            data = []
+            for item in dataset_items:
+                data.append([
+                    getattr(item, "dataset_name", "unknown"),
+                    getattr(item, "path", "unknown"),
+                    getattr(item, "weight", 0.0),
+                    "pending",
+                ])
+
+        table = wandb.Table(columns=columns, data=data)
+        wandb.log({f"{pipeline_kind}/plan_table": table}, commit=False)
+        logger.debug(f"Logged plan table with {len(data)} datasets to W&B")
+
+    except ImportError:
+        logger.debug("wandb not installed, skipping plan table logging")
+    except Exception as e:
+        logger.warning(f"Failed to log plan table to W&B: {e}")
