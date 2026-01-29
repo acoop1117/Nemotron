@@ -50,6 +50,7 @@ logger:
   log_interval: 10
   wandb_project: ${run.wandb.project}   # Set from env.toml [wandb]
   wandb_entity: ${run.wandb.entity}     # Set from env.toml [wandb]
+  wandb_exp_name: nano3-sft             # Experiment name shown in wandb UI
 
 checkpoint:
   save: /nemo_run/sft

@@ -1,8 +1,11 @@
 run:
   data: SplitJsonlDataArtifact-rl:latest
-  model: sft:latest
+  model: sft:latest  # Megatron checkpoint to finetune from
   env:
     container: nvcr.io/nvidia/nemo-rl:v0.4.0.nemotron_3_nano
+
+# Initial checkpoint for finetuning (Megatron format from SFT)
+initial_checkpoint: ${art:model,path}
 
 # GRPO Algorithm Configuration for training Nano v3
 grpo:
@@ -75,7 +78,8 @@ checkpointing:
   checkpoint_must_save_by: "00:03:40:00"
 
 policy:
-  model_name: ${art:model,path}
+  # HuggingFace model for architecture (vLLM init + HF→Megatron conversion)
+  model_name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16
   tokenizer:
     name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16
   train_global_batch_size: 2048

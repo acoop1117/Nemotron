@@ -573,6 +573,19 @@ def _execute_nemo_run(
         repo_config = Path.cwd() / "config.yaml"
         shutil.copy2(train_path, repo_config)
 
+        # For self_contained packager, create inlined main.py at repo root
+        # This ensures the script with inlined imports is available on remote
+        repo_main = None
+        if packager == "self_contained":
+            from nemotron.kit.packaging.self_contained_packager import inline_imports
+
+            script_file = Path(script_path)
+            if not script_file.is_absolute():
+                script_file = Path.cwd() / script_path
+            inlined = inline_imports(script_file, repo_root=Path.cwd(), package_prefix="nemotron")
+            repo_main = Path.cwd() / "main.py"
+            repo_main.write_text(inlined, encoding="utf-8")
+
         # Check for YAML overrides for workdir, pre_ray_start_commands, and run_command
         effective_workdir = workdir
         effective_pre_ray_start_commands = pre_ray_start_commands
@@ -590,24 +603,19 @@ def _execute_nemo_run(
             setup_commands = list(effective_pre_ray_start_commands)
         elif packager == "self_contained":
             # For self_contained packager, skip uv sync (dependencies in container)
-            # and copy files from /nemo_run/code to workdir
+            # Files (main.py, config.yaml) are rsynced to the working directory
+            # Copy them to workdir if specified
             setup_commands = [
                 "find . -type d -name __pycache__ -delete 2>/dev/null || true",
             ]
             if effective_workdir:
                 setup_commands.extend(
                     [
-                        f"cp /nemo_run/code/main.py {effective_workdir}/",
-                        f"cp /nemo_run/code/config.yaml {effective_workdir}/",
+                        f"cp main.py {effective_workdir}/",
+                        f"cp config.yaml {effective_workdir}/",
                     ]
                 )
-            else:
-                setup_commands.extend(
-                    [
-                        "cp /nemo_run/code/main.py .",
-                        "cp /nemo_run/code/config.yaml .",
-                    ]
-                )
+            # If no workdir, files are already in the right place (rsynced code dir)
         else:
             # Default setup for other packagers
             setup_commands = [

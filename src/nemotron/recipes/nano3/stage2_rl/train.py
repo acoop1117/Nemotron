@@ -62,6 +62,74 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return args, overrides
 
 
+def setup_initial_checkpoint(initial_checkpoint_path: str, checkpoint_dir: str) -> None:
+    """Set up a checkpoint structure from an initial Megatron checkpoint for finetuning.
+
+    This creates a checkpoint directory structure that nemo-rl will recognize as
+    a resume checkpoint, allowing us to start RL training from an SFT checkpoint.
+
+    Args:
+        initial_checkpoint_path: Path to the Megatron checkpoint (e.g., from SFT).
+        checkpoint_dir: The checkpoint directory where nemo-rl saves checkpoints.
+    """
+    import json
+    from pathlib import Path
+
+    checkpoint_dir = Path(checkpoint_dir)
+    initial_path = Path(initial_checkpoint_path)
+
+    # Check if there's already a checkpoint in checkpoint_dir
+    existing_checkpoints = list(checkpoint_dir.glob("step_*"))
+    if existing_checkpoints:
+        print(f"Found existing checkpoints in {checkpoint_dir}, skipping initial checkpoint setup")
+        return
+
+    # Create the checkpoint directory structure
+    # nemo-rl expects: checkpoint_dir/step_N/policy/weights/
+    step_dir = checkpoint_dir / "step_0"
+    policy_dir = step_dir / "policy"
+    weights_dir = policy_dir / "weights"
+
+    # Create parent directories
+    weights_dir.mkdir(parents=True, exist_ok=True)
+
+    # The initial checkpoint should contain Megatron distributed checkpoint files
+    # Symlink or copy the contents to the weights directory
+    if initial_path.is_dir():
+        # Find the iteration directory (e.g., iter_XXXXXX)
+        iter_dirs = [d for d in initial_path.iterdir() if d.is_dir() and d.name.startswith("iter_")]
+        if iter_dirs:
+            # Use the latest iteration
+            iter_dirs.sort(key=lambda x: int(x.name.split("_")[1]))
+            source_dir = iter_dirs[-1]
+            print(f"Using checkpoint iteration: {source_dir.name}")
+        else:
+            # Assume the directory itself contains the checkpoint files
+            source_dir = initial_path
+
+        # Symlink the checkpoint contents
+        for item in source_dir.iterdir():
+            target = weights_dir / item.name
+            if not target.exists():
+                target.symlink_to(item)
+                print(f"Linked {item.name} -> {target}")
+    else:
+        raise ValueError(f"Initial checkpoint path is not a directory: {initial_path}")
+
+    # Create a minimal training_info.json so checkpointer recognizes this as valid
+    training_info = {
+        "step": 0,
+        "epoch": 0,
+        "global_step": 0,
+        "initial_checkpoint": str(initial_path),
+    }
+    training_info_path = step_dir / "training_info.json"
+    with open(training_info_path, "w") as f:
+        json.dump(training_info, f, indent=2)
+
+    print(f"Set up initial checkpoint at {step_dir}")
+
+
 def setup_single_nemo_gym_dataset(jsonl_fpath: str, tokenizer, num_repeats: int | None = None):
     """Load and prepare a NeMo-Gym dataset from JSONL file."""
     from nemo_rl.data.datasets import AllTaskProcessedDataset
@@ -179,6 +247,11 @@ def main() -> None:
 
     config: MasterConfig = OmegaConf.to_container(config, resolve=True)
     print("Applied CLI overrides")
+
+    # Set up initial checkpoint for finetuning if specified
+    initial_checkpoint = config.get("initial_checkpoint")
+    if initial_checkpoint and config["checkpointing"]["enabled"]:
+        setup_initial_checkpoint(initial_checkpoint, config["checkpointing"]["checkpoint_dir"])
 
     # Get the next experiment directory with incremented ID
     config["logger"]["log_dir"] = get_next_experiment_dir(config["logger"]["log_dir"])
