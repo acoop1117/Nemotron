@@ -48,8 +48,7 @@ The pipeline handles:
 Install the required libraries. Note that `nv-ingest` is used in **Library Mode** for this example, which runs locally without requiring a complex Docker setup.
 
 ```bash
-pip install ninja packaging wheel
-pip install nv-ingest nv-ingest-api nv-ingest-client milvus-lite pymilvus transformers accelerate pillow
+uv pip install -r pyproject.toml
 ```
 ### 2. Configure API Key
 Export your NVIDIA API key to access the cloud-hosted generation models.
