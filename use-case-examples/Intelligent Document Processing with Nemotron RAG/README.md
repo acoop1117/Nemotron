@@ -15,7 +15,7 @@ The pipeline handles:
 
 | Component | Model | Function | Deployment |
 |-----------|-------|----------|------------|
-| **Extraction** | `NeMo Retriever (nv-ingest)` | Optical Character Recognition (OCR), Table & Chart Extraction | Self-hosted (Library Mode) |
+| **Extraction** | `NeMo Retriever Library (nv-ingest)` | A library for advanced document parsing | Self-hosted (Library Mode) |
 | **Embedding** | `nvidia/llama-nemotron-embed-vl-1b-v2` | Multimodal Embedding (Text + Images) | Local Inference (Hugging Face) |
 | **Reranking** | `nvidia/llama-nemotron-rerank-vl-1b-v2` | Visual Cross-Encoder Reranking | Local Inference (Hugging Face) |
 | **Reasoning** | `nvidia/llama-3.3-nemotron-super-49b` | Citation-Backed Answer Generation | NVIDIA NIM / API |
